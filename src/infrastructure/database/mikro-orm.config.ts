@@ -4,6 +4,7 @@ import { env } from "../../config/env.ts";
 import { LedgerEntryEntity } from "./entities/ledger-entry.entity.ts";
 import { WagerTransactionEntity } from "./entities/wager-transaction.entity.ts";
 import { WalletEntity } from "./entities/wallet.entity.ts";
+import { OutboxMessageEntity } from "./entities/outbox-message.entity.ts";
 
 /**
  * Configuração única do MikroORM, usada pela aplicação (AppModule)
@@ -13,7 +14,7 @@ export default defineConfig({
   clientUrl: env.databaseUrl,
 
   // Formato das linhas do banco (não são as classes de domínio; ver mappers/).
-  entities: [WalletEntity, WagerTransactionEntity, LedgerEntryEntity],
+  entities: [WalletEntity, WagerTransactionEntity, LedgerEntryEntity, OutboxMessageEntity],
 
   extensions: [Migrator],
   migrations: {
