@@ -1,9 +1,12 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query } from "@nestjs/common";
 import { InvalidPayloadError } from "../application/shared/invalid-payload.error.ts";
 import { CreateWalletUseCase } from "../application/wallet/create-wallet.use-case.ts";
 import { GetWalletUseCase } from "../application/wallet/get-wallet.use-case.ts";
 import { parseCreateWalletRequest } from "./create-wallet.request.ts";
 import { toWalletResponse, type WalletResponse } from "./wallet.response.ts";
+import { LedgerPageResponse, toLedgerPageResponse } from "./ledger.response.ts";
+import { ListWalletLedgerUseCase } from "../application/wallet/list-wallet-ledger.use-case.ts";
+import { parseLedgerQuery } from "./ledger.request.ts";
 
 /** Pipe do Nest para o :walletId, lançando o NOSSO erro (mesmo formato de resposta). */
 const walletIdPipe = new ParseUUIDPipe({
@@ -19,6 +22,8 @@ export class WalletsController {
   constructor(
     private readonly createWallet: CreateWalletUseCase,
     private readonly getWallet: GetWalletUseCase,
+    private readonly listLedger: ListWalletLedgerUseCase
+
   ) {}
 
   @Post()
@@ -34,4 +39,16 @@ export class WalletsController {
     const wallet = await this.getWallet.execute(walletId);
     return toWalletResponse(wallet);
   }
+
+  @Get(":walletId/ledger")
+  async ledger(
+    @Param("walletId", walletIdPipe) walletId: string,
+    @Query("cursor") cursor: string | undefined,
+    @Query("limit") limit: string | undefined,
+  ): Promise<LedgerPageResponse> {
+    const page   = parseLedgerQuery(cursor, limit)
+    const result = await this.listLedger.execute(walletId, page)
+    return toLedgerPageResponse(walletId, result)
+  }
+
 }

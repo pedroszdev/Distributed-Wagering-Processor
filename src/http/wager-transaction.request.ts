@@ -2,7 +2,7 @@ import { InvalidPayloadError } from "../application/shared/invalid-payload.error
 import { Money, type MoneyProps } from "../domain/money/money.ts";
 import { WagerTransactionKind } from "../domain/wager-transaction/wager-transaction.enums.ts";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface WagerTransactionInput {
   idempotencyKey: string;
