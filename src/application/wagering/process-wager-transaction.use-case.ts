@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { EntityManager, ref } from "@mikro-orm/postgresql";
+import { EntityManager } from "@mikro-orm/postgresql";
 import { LedgerDirection } from "../../domain/ledger/ledger-direction.ts";
 import { WalletLedgerEntry } from "../../domain/ledger/ledger-entry.ts";
 import type { MoneyProps } from "../../domain/money/money.ts";
@@ -19,6 +19,15 @@ import { decideIdempotency } from "./idempotency.ts";
 import { computePayloadHash } from "./payload-hash.ts";
 import { checkReversal } from "./reversal-rules.ts";
 import { IdempotencyConflictError, WalletPlayerMismatchError } from "./wagering.errors.ts";
+import { OutboxMessageRepository } from "../../infrastructure/database/repositories/outbox-message.repository.ts";
+import { OutboxMessage } from "../../domain/outbox/outbox-message.ts";
+import type { EventContext, IntegrationEvent } from "../../domain/shared/integration-events.ts";
+import {
+  WagerTransactionPendingReference,
+  WagerTransactionProcessed,
+  WagerTransactionRejected,
+} from "../../domain/wager-transaction/wager-transaction.events.ts";
+import { WalletBalanceChanged } from "../../domain/wallet/wallet.events.ts";
 
 export interface WagerTransactionResult {
   transactionId: string;
@@ -40,24 +49,37 @@ export class ProcessWagerTransactionUseCase {
     private readonly wallets: WalletRepository,
     private readonly transactions: WagerTransactionRepository,
     private readonly ledger: LedgerEntryRepository,
+    private readonly outbox: OutboxMessageRepository,
   ) {}
 
-  async execute(input: WagerTransactionInput): Promise<WagerTransactionResult> {
+  /**
+   * @param context quem chamou (HTTP ou SQS) diz o correlationId dos eventos.
+   *                Sem contexto, gera um id novo (a cada chamada).
+   */
+  async execute(
+    input: WagerTransactionInput,
+    context: EventContext = { correlationId: Bun.randomUUIDv7() },
+  ): Promise<WagerTransactionResult> {
     const payloadHash = computePayloadHash(input);
     try {
-      return await this.em.transactional((tx) => this.process(tx, input, payloadHash));
+      return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context));
     } catch (error) {
       if (
         isUniqueViolation(error, "wager_tx_provider_idempotency_key_uq") ||
         isUniqueViolation(error, "wager_tx_provider_external_id_uq")
       ) {
-        return await this.em.transactional((tx) => this.process(tx, input, payloadHash));
+        return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context));
       }
       throw error;
     }
   }
 
-  private async process(tx: EntityManager, input: WagerTransactionInput, payloadHash: string): Promise<WagerTransactionResult> {
+  private async process(
+    tx: EntityManager,
+    input: WagerTransactionInput,
+    payloadHash: string,
+    context: EventContext,
+  ): Promise<WagerTransactionResult> {
     // 1. TRAVA a wallet. Daqui até o commit, ninguém mais mexe nela.
     const wallet = await this.wallets.findByIdForUpdate(tx, input.walletId);
     if (!wallet) throw new WalletNotFoundError(input.walletId);
@@ -89,7 +111,14 @@ export class ProcessWagerTransactionUseCase {
       await this.wallets.update(tx, wallet, expectedVersion);
       await this.ledger.insert(tx, outcome.entry);
     }
-    // (item 4: os eventos da outbox entram aqui, na mesma transação)
+
+    // 8. Os eventos vão para a OUTBOX, na MESMA transação SQL. Se algo acima
+    //    falhar, o rollback leva os eventos junto: nunca existe evento de algo
+    //    que não aconteceu. Quem publica no SQS é o worker (item 7), DEPOIS do commit.
+    //    Replay e conflito saíram lá no passo 2/3, então não geram evento de novo.
+    for (const event of this.eventsFor(transaction, wallet, outcome, context)) {
+      await this.outbox.insert(tx, OutboxMessage.enqueue(event));
+    }
 
     return this.toResult(transaction, wallet, false);
   }
@@ -172,4 +201,34 @@ export class ProcessWagerTransactionUseCase {
       throw error;
     }
   }
+
+  /** Quais eventos este resultado gera (tabela da seção 11 do README). */
+  private eventsFor(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    outcome: RulesOutcome,
+    context: EventContext,
+  ): IntegrationEvent<unknown>[] {
+    switch (transaction.status) {
+      case WagerTransactionStatus.Processed: {
+        const events: IntegrationEvent<unknown>[] = [WagerTransactionProcessed.from(transaction, context)];
+        // "Somente quando o saldo muda": o entry só existe se houve débito/crédito.
+        // LOSS é PROCESSED mas não tem entry → só o evento acima.
+        if (outcome.entry) {
+          events.push(WalletBalanceChanged.from(wallet, outcome.entry, context));
+        }
+        return events;
+      }
+      case WagerTransactionStatus.Rejected:
+        return [WagerTransactionRejected.from(transaction, context)];
+
+      case WagerTransactionStatus.PendingReference:
+        return [WagerTransactionPendingReference.from(transaction, context)];
+
+      default:
+        // PENDING ou FAILED aqui = bug no applyRules (toda regra termina num status final).
+        throw new Error(`Transação ${transaction.id} terminou o processamento em ${transaction.status}`);
+    }
+  }
+
 }

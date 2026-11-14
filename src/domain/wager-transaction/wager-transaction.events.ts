@@ -53,7 +53,9 @@ export class WagerTransactionProcessed extends IntegrationEvent<WagerTransaction
             kind: transaction.kind,
             money: transaction.money.toJSON(),
             balanceAfter: transaction.balanceAfter!.toJSON(),
-            referenceTransactionId: transaction.referenceTransactionId
+            // Só reversões têm referência. Sem o spread, o campo iria como
+            // `undefined`, e o MikroORM grava isso como `null` no jsonb.
+            ...(transaction.referenceTransactionId ? { referenceTransactionId: transaction.referenceTransactionId } : {}),
         },
     });
   }
