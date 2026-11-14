@@ -22,6 +22,13 @@ export class WagerTransactionRepository {
     return record ? wagerTransactionToDomain(record) : null;
   }
   
+  async findById(em: EntityManager, id: string): Promise<WagerTransaction | null> {
+    // ✍️ findOne pelo id + mapper (igual aos outros)
+    const record = await em.findOne(WagerTransactionEntity, {id})
+    return record ? wagerTransactionToDomain(record) : null;
+
+  }
+
   /**
    * Essa transação já foi revertida? Conta QUALQUER reversão processada (REFUND ou
    * ROLLBACK), não só a do mesmo tipo: senão um REFUND seguido de um ROLLBACK da

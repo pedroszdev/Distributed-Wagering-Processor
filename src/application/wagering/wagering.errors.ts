@@ -21,3 +21,11 @@ export class WalletPlayerMismatchError extends DomainError {
     super(`O player ${playerId} do pedido não é dono da wallet ${walletId}`);
   }
 }
+
+export class WagerTransactionNotFoundError extends DomainError {
+  readonly code = "WAGER_TRANSACTION_NOT_FOUND";
+
+  constructor(readonly lookup: string) {   // ← texto que diz o que foi procurado
+    super(`Transação ${lookup} não encontrada`);
+  }
+}

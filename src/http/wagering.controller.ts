@@ -1,15 +1,24 @@
-import { Body, Controller, Headers, Post, Res } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Post, Res } from "@nestjs/common";
 import type { Response } from "express";
 import {
   ProcessWagerTransactionUseCase,
   type WagerTransactionResult,
 } from "../application/wagering/process-wager-transaction.use-case.ts";
 import { parseWagerTransactionRequest } from "./wager-transaction.request.ts";
-import { httpStatusFor } from "./wager-transaction.response.ts";
+import { GetWagerTransactionUseCase } from "../application/wagering/get-wager-transaction.use-case.ts";
+import { InvalidPayloadError } from "../application/shared/invalid-payload.error.ts";
+import { httpStatusFor, toWagerTransactionView, WagerTransactionView } from "./wager-transaction.response.ts";
+
+const transactionIdPipe = new ParseUUIDPipe({
+  exceptionFactory: () => new InvalidPayloadError("transactionId deve ser um UUID"),
+});
 
 @Controller()
 export class WageringController {
-  constructor(private readonly processTransaction: ProcessWagerTransactionUseCase) {}
+  constructor(
+    private readonly processTransaction: ProcessWagerTransactionUseCase,
+    private readonly getTransaction: GetWagerTransactionUseCase, 
+  ) {}
 
   @Post("wagering/transactions")
   async submit(
@@ -23,7 +32,22 @@ export class WageringController {
     const input = parseWagerTransactionRequest(body, idempotencyKey)
     const result = await this.processTransaction.execute(input, { correlationId })
     res.status(httpStatusFor(result))
-    res.setHeader("x-correlation-id", correlationId)
     return result
+  }
+
+  @Get("wagering/transactions/:transactionId")
+  async getById(@Param("transactionId", transactionIdPipe) transactionId: string): Promise<WagerTransactionView> {
+    const response = await this.getTransaction.byId(transactionId)
+    return toWagerTransactionView(response)
+
+  }
+
+  @Get("providers/:providerId/wagering/transactions/:externalTransactionId")
+  async getByExternalId(
+    @Param("providerId") providerId: string,
+    @Param("externalTransactionId") externalTransactionId: string,
+  ): Promise<WagerTransactionView> {
+    const response = await this.getTransaction.byExternalId(providerId, externalTransactionId)
+    return toWagerTransactionView(response)
   }
 }
