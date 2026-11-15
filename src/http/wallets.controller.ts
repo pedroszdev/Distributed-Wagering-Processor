@@ -7,6 +7,7 @@ import { toWalletResponse, type WalletResponse } from "./wallet.response.ts";
 import { LedgerPageResponse, toLedgerPageResponse } from "./ledger.response.ts";
 import { ListWalletLedgerUseCase } from "../application/wallet/list-wallet-ledger.use-case.ts";
 import { parseLedgerQuery } from "./ledger.request.ts";
+import { ReconcileWalletUseCase, type ReconciliationReport } from "../application/wallet/reconcile-wallet.use-case.ts";
 
 /** Pipe do Nest para o :walletId, lançando o NOSSO erro (mesmo formato de resposta). */
 const walletIdPipe = new ParseUUIDPipe({
@@ -22,8 +23,8 @@ export class WalletsController {
   constructor(
     private readonly createWallet: CreateWalletUseCase,
     private readonly getWallet: GetWalletUseCase,
-    private readonly listLedger: ListWalletLedgerUseCase
-
+    private readonly listLedger: ListWalletLedgerUseCase,
+    private readonly reconcileWallet: ReconcileWalletUseCase,
   ) {}
 
   @Post()
@@ -51,4 +52,14 @@ export class WalletsController {
     return toLedgerPageResponse(walletId, result)
   }
 
+  /**
+   * POST (e não GET) porque é uma AÇÃO com efeito: registra métrica e, se
+   * divergir, um log de erro. 200 nos dois casos: a divergência vem no body
+   * (`consistent: false`), não é falha da requisição.
+   */
+  @Post(":walletId/reconciliation")
+  @HttpCode(HttpStatus.OK)
+  async reconcile(@Param("walletId", walletIdPipe) walletId: string): Promise<ReconciliationReport> {
+    return this.reconcileWallet.execute(walletId);
+  }
 }

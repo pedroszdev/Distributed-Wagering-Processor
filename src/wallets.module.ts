@@ -4,12 +4,14 @@ import { GetWalletUseCase } from "./application/wallet/get-wallet.use-case.ts";
 import { WalletsController } from "./http/wallets.controller.ts";
 import { DatabaseModule } from "./infrastructure/database/database.module.ts";
 import { ListWalletLedgerUseCase } from "./application/wallet/list-wallet-ledger.use-case.ts";
+import { ReconcileWalletUseCase } from "./application/wallet/reconcile-wallet.use-case.ts";
 
 /** Liga as peças: o Nest cria cada provider uma vez e injeta onde for pedido. */
 @Module({
   imports: [DatabaseModule],
   controllers: [WalletsController],
   providers: [
+    ReconcileWalletUseCase,
     ListWalletLedgerUseCase,
     CreateWalletUseCase,
     GetWalletUseCase,

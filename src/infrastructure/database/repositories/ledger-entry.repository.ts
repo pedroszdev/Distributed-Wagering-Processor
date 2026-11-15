@@ -28,4 +28,47 @@ export class LedgerEntryRepository {
   return recordsOrd
 }
 
+  /**
+   * O saldo gravado na wallet e as somas do ledger, NUM ÚNICO comando SQL.
+   *
+   * Por que um comando só: com duas consultas separadas, uma BET que fizesse
+   * commit entre elas daria uma "divergência" falsa (saldo de depois, ledger de
+   * antes). Um único SELECT enxerga um snapshot só do banco (MVCC), sem travar
+   * a wallet — a reconciliação não atrapalha as apostas de uma hot wallet.
+   *
+   * As somas são feitas em `numeric` (decimal exato) no Postgres; créditos e
+   * débitos separados porque o Money do domínio não aceita valor negativo.
+   */
+  async reconciliationSnapshot(em: EntityManager, walletId: string): Promise<ReconciliationSnapshot | null> {
+    const [row] = await em.execute<
+      { currency: string; stored: string; credits: string; debits: string; entries: number }[]
+    >(
+      `select w.currency,
+              w.balance_amount                                                              as stored,
+              coalesce(sum(e.amount) filter (where e.direction = 'CREDIT'), 0)::numeric(20,2) as credits,
+              coalesce(sum(e.amount) filter (where e.direction = 'DEBIT'), 0)::numeric(20,2)  as debits,
+              count(e.id)::int                                                              as entries
+         from wallets w
+         left join wallet_ledger_entries e on e.wallet_id = w.id
+        where w.id = ?
+        group by w.id`,
+      [walletId],
+    );
+    if (!row) return null;
+    return {
+      currency: row.currency,
+      storedAmount: row.stored,
+      creditsAmount: row.credits,
+      debitsAmount: row.debits,
+      entries: row.entries,
+    };
+  }
+}
+
+export interface ReconciliationSnapshot {
+  currency: string;
+  storedAmount: string;
+  creditsAmount: string;
+  debitsAmount: string;
+  entries: number;
 }
