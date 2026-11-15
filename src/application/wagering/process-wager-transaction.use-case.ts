@@ -21,6 +21,9 @@ import { OutboxMessage } from "../../domain/outbox/outbox-message.ts";
 import type { EventContext } from "../../domain/shared/integration-events.ts";
 import { WagerRules } from "./wager-rules.ts";
 import { nextPendingAttemptAt, PENDING_REFERENCE_POLICY, type PendingReferencePolicy } from "./pending-reference-policy.ts";
+import { ConcurrentWalletUpdateError } from "../shared/concurrent-update.error.ts";
+import { logContext } from "../../infrastructure/observability/log-context.ts";
+import { lockConflictType, Metrics } from "../../infrastructure/observability/metrics.ts";
 
 export interface WagerTransactionResult {
   transactionId: string;
@@ -47,6 +50,7 @@ export class ProcessWagerTransactionUseCase {
     private readonly inbox: InboxMessageRepository,
     private readonly rules: WagerRules,
     @Inject(PENDING_REFERENCE_POLICY) private readonly pendingPolicy: PendingReferencePolicy,
+    private readonly metrics: Metrics,
   ) {}
 
   /**
@@ -62,16 +66,41 @@ export class ProcessWagerTransactionUseCase {
     inbox?: InboxContext,
   ): Promise<WagerTransactionResult> {
     const payloadHash = computePayloadHash(input);
+    const channel = inbox ? "sqs" : "http";
+    const startedAt = performance.now();
+    logContext.assign({ providerId: input.providerId, walletId: input.walletId });
     try {
-      return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context, inbox));
-    } catch (error) {
-      if (
-        isUniqueViolation(error, "wager_tx_provider_idempotency_key_uq") ||
-        isUniqueViolation(error, "wager_tx_provider_external_id_uq")
-      ) {
-        return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context, inbox));
+      let result: WagerTransactionResult;
+      try {
+        result = await this.em.transactional((tx) => this.process(tx, input, payloadHash, context, inbox));
+      } catch (error) {
+        if (
+          isUniqueViolation(error, "wager_tx_provider_idempotency_key_uq") ||
+          isUniqueViolation(error, "wager_tx_provider_external_id_uq")
+        ) {
+          // Dois pedidos iguais em wallets diferentes passaram juntos pelo passo 2;
+          // a constraint barrou o segundo. Refaz: agora ele vira replay/conflito.
+          this.metrics.walletLockConflicts.inc({ type: "idempotency_race" });
+          result = await this.em.transactional((tx) => this.process(tx, input, payloadHash, context, inbox));
+        } else {
+          throw error;
+        }
       }
+      // Métricas só DEPOIS do commit: um rollback não conta como processado.
+      if (result.idempotentReplay) {
+        this.metrics.wagerDuplicates.inc({ mechanism: "idempotency_replay" });
+      } else {
+        this.metrics.wagerTransactions.inc({ channel, kind: input.kind, status: result.status });
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof DuplicateMessageError) this.metrics.wagerDuplicates.inc({ mechanism: "inbox" });
+      if (error instanceof ConcurrentWalletUpdateError) this.metrics.walletLockConflicts.inc({ type: "version_conflict" });
+      const conflict = lockConflictType(error);
+      if (conflict) this.metrics.walletLockConflicts.inc({ type: conflict });
       throw error;
+    } finally {
+      this.metrics.wagerProcessingSeconds.observe((performance.now() - startedAt) / 1_000, { channel });
     }
   }
 
@@ -92,7 +121,10 @@ export class ProcessWagerTransactionUseCase {
     }
 
     // 1. TRAVA a wallet. Daqui até o commit, ninguém mais mexe nela.
+    //    A espera pelo lock vira métrica: numa hot wallet, é aqui que a fila se forma.
+    const lockStartedAt = performance.now();
     const wallet = await this.wallets.findByIdForUpdate(tx, input.walletId);
+    this.metrics.walletLockWaitSeconds.observe((performance.now() - lockStartedAt) / 1_000);
     if (!wallet) throw new WalletNotFoundError(input.walletId);
 
     // 2. Idempotência pela key.
@@ -112,6 +144,7 @@ export class ProcessWagerTransactionUseCase {
     // 5. Cria a transação (o domínio valida a referência e o valor).
     const transaction = WagerTransaction.create({ ...input, id: Bun.randomUUIDv7(), payloadHash });
     const expectedVersion = wallet.version; // ANTES de qualquer debit/credit
+    logContext.assign({ transactionId: transaction.id });
 
     // 6. Aplica a regra do kind (wager-rules.ts, as mesmas regras do worker de PENDING_REFERENCE).
     const outcome = await this.rules.apply(tx, transaction, wallet);

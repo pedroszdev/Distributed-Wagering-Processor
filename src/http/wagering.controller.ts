@@ -8,6 +8,7 @@ import { parseWagerTransactionRequest } from "./wager-transaction.request.ts";
 import { GetWagerTransactionUseCase } from "../application/wagering/get-wager-transaction.use-case.ts";
 import { InvalidPayloadError } from "../application/shared/invalid-payload.error.ts";
 import { httpStatusFor, toWagerTransactionView, WagerTransactionView } from "./wager-transaction.response.ts";
+import { logContext } from "../infrastructure/observability/log-context.ts";
 
 const transactionIdPipe = new ParseUUIDPipe({
   exceptionFactory: () => new InvalidPayloadError("transactionId deve ser um UUID"),
@@ -24,11 +25,11 @@ export class WageringController {
   async submit(
     @Body() body: unknown,
     @Headers("idempotency-key") idempotencyKey: string | undefined,
-    @Headers("x-correlation-id") correlationIdHeader: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<WagerTransactionResult> {
-    const correlationId = !correlationIdHeader ? Bun.randomUUIDv7() : correlationIdHeader
-    res.setHeader("x-correlation-id", correlationId);
+    // O RequestContextMiddleware já leu (ou gerou) o x-correlation-id, devolveu no
+    // header da resposta e abriu o contexto de log: aqui só reaproveitamos.
+    const correlationId = logContext.get().correlationId ?? Bun.randomUUIDv7();
     const input = parseWagerTransactionRequest(body, idempotencyKey)
     const result = await this.processTransaction.execute(input, { correlationId })
     res.status(httpStatusFor(result))

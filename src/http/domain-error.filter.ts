@@ -3,6 +3,7 @@ import type { Response } from "express";
 import { DomainError } from "../domain/shared/domain-error.ts";
 import { isTransientDatabaseError } from "../infrastructure/database/transient-error.ts";
 import { BaseExceptionFilter } from "@nestjs/core";
+import { Metrics } from "../infrastructure/observability/metrics.ts";
 
 /**
  * Traduz o `code` do erro de domínio para o status HTTP.
@@ -31,7 +32,11 @@ const STATUS_BY_CODE: Record<string, HttpStatus> = {
 @Catch()
 export class DomainErrorFilter extends BaseExceptionFilter {
   private readonly logger = new Logger(DomainErrorFilter.name);
-  
+
+  constructor(private readonly metrics: Metrics) {
+    super(); // o httpAdapterHost do BaseExceptionFilter chega por injeção de propriedade
+  }
+
   override catch(error: unknown, host: ArgumentsHost): void {  
     const response = host.switchToHttp().getResponse<Response>();
 
@@ -48,6 +53,7 @@ export class DomainErrorFilter extends BaseExceptionFilter {
     }
 
     if (isTransientDatabaseError(error)) {
+      this.metrics.transientErrors.inc({ source: "http" });
       this.logger.warn(
         `Falha transitória no banco; respondendo 503: ${(error as Error).message}`,
       );

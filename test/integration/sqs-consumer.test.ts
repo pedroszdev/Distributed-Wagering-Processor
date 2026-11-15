@@ -16,6 +16,8 @@ import {
   SqsWagerTransactionConsumer,
   type PollResult,
 } from "../../src/infrastructure/messaging/sqs-wager-transaction.consumer.ts";
+import { Metrics } from "../../src/infrastructure/observability/metrics.ts";
+import { JsonLogger } from "../../src/infrastructure/observability/json-logger.ts";
 import { startTestApp, type TestApp } from "./support/app.ts";
 import { closeTestOrm, sql } from "./support/database.ts";
 import { assertLedgerMatchesBalance } from "./support/ledger.ts";
@@ -561,6 +563,49 @@ describe("ordem do grupo FIFO", () => {
     expect(total.processed).toBe(1);
     expect(await balanceOf(walletB.id)).toBe("90.00");
     expect(await balanceOf(walletA.id)).toBe("100.00");
+  });
+});
+
+describe("observabilidade do consumidor", () => {
+  test("métricas por desfecho e DLQ por motivo; logs JSON com messageId, correlationId, transactionId, walletId e providerId", async () => {
+    // Uma instância só deste teste, com os logs indo para um array.
+    const lines: string[] = [];
+    const observed = await startTestApp({ logger: new JsonLogger("log", (line) => lines.push(line)) });
+    try {
+      const metrics = observed.app.get(Metrics);
+      const wallet = await newWallet("100.00");
+      const message = wagerMessage(wallet, "BET", "33.33");
+      await send(message, wallet.id);
+      await send(message, wallet.id); // duplicata
+      await send("{ quebrada", "g-bad"); // DLQ
+
+      await pollUntilFinished(consumerOf(observed), 3);
+
+      expect(metrics.sqsMessages.get({ outcome: "processed" })).toBe(1);
+      expect(metrics.sqsMessages.get({ outcome: "duplicate" })).toBe(1);
+      expect(metrics.sqsMessages.get({ outcome: "dead_lettered" })).toBe(1);
+      expect(metrics.sqsDeadLetters.get({ reason: "INVALID_PAYLOAD" })).toBe(1);
+      expect(metrics.wagerDuplicates.get({ mechanism: "inbox" })).toBe(1);
+      expect(metrics.sqsProcessingSeconds.count({ outcome: "processed" })).toBe(1);
+
+      const entries = lines.map((line) => JSON.parse(line));
+      const processed = entries.find((e) => e.msg === "mensagem processada");
+      expect(processed).toMatchObject({
+        level: "info",
+        context: "SqsWagerTransactionConsumer",
+        messageId: message.messageId,
+        correlationId: message.messageId,
+        sqsMessageId: expect.any(String),
+        transactionId: expect.any(String),
+        walletId: wallet.id,
+        providerId: "provider-queue",
+        durationMs: expect.any(Number),
+      });
+      expect(entries.find((e) => e.msg?.includes("DLQ"))).toMatchObject({ level: "error", reason: "INVALID_PAYLOAD" });
+      expect(lines.join("\n")).not.toContain("33.33"); // sem o valor da aposta nos logs
+    } finally {
+      await observed.close();
+    }
   });
 });
 

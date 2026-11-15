@@ -20,6 +20,8 @@ import {
   type PendingReferencePolicy,
 } from "./pending-reference-policy.ts";
 import { WagerRules } from "./wager-rules.ts";
+import { logContext } from "../../infrastructure/observability/log-context.ts";
+import { lockConflictType, Metrics } from "../../infrastructure/observability/metrics.ts";
 
 export type PendingReferenceOutcome = "processed" | "rejected" | "rescheduled" | "skipped";
 
@@ -55,6 +57,7 @@ export class ResolvePendingReferencesUseCase {
     private readonly outbox: OutboxMessageRepository,
     private readonly rules: WagerRules,
     @Inject(PENDING_REFERENCE_POLICY) private readonly policy: PendingReferencePolicy,
+    private readonly metrics: Metrics,
   ) {}
 
   async execute(batchSize: number, leaseMs: number): Promise<PendingReferenceBatchResult> {
@@ -75,13 +78,21 @@ export class ResolvePendingReferencesUseCase {
       failed: 0,
     };
     // Um item por vez, cada um na sua transação: um erro num não desfaz os outros.
+    // Cada item tem o seu contexto de log (transactionId/walletId em toda linha).
     for (const ticket of tickets) {
-      try {
-        result[await this.resolve(ticket)]++;
-      } catch (error) {
-        result.failed++;
-        this.logger.warn({ msg: "falha ao resolver PENDING_REFERENCE; a lease vence e outro tenta", transactionId: ticket.transactionId, error: String(error) });
-      }
+      await logContext.run({ transactionId: ticket.transactionId, walletId: ticket.walletId }, async () => {
+        try {
+          const outcome = await this.resolve(ticket);
+          result[outcome]++;
+          this.metrics.pendingReferenceResolutions.inc({ outcome });
+        } catch (error) {
+          result.failed++;
+          this.metrics.pendingReferenceResolutions.inc({ outcome: "failed" });
+          const conflict = lockConflictType(error);
+          if (conflict) this.metrics.walletLockConflicts.inc({ type: conflict });
+          this.logger.warn({ msg: "falha ao resolver PENDING_REFERENCE; a lease vence e outro tenta", error: String(error) });
+        }
+      });
     }
     return result;
   }
@@ -130,6 +141,7 @@ export class ResolvePendingReferencesUseCase {
 
       // 6. Eventos na outbox, na mesma transação.
       const context = await this.contextFor(tx, transaction);
+      logContext.assign({ correlationId: context.correlationId, providerId: transaction.providerId });
       for (const event of this.rules.eventsFor(transaction, wallet, outcome, context)) {
         await this.outbox.insert(tx, OutboxMessage.enqueue(event));
       }

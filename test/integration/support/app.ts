@@ -1,4 +1,4 @@
-import type { INestApplication } from "@nestjs/common";
+import type { INestApplication, LoggerService } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "../../../src/app.module.ts";
 import { getTestOrm } from "./database.ts";
@@ -22,10 +22,12 @@ export interface TestApp {
  * listen(0): o sistema operacional escolhe uma porta livre, então o teste nunca
  * briga com o `bun run dev` e dá para subir várias instâncias ao mesmo tempo.
  */
-export async function startTestApp(): Promise<TestApp> {
+export async function startTestApp(options: { logger?: LoggerService | false } = {}): Promise<TestApp> {
   await getTestOrm(); // garante o schema antes do Nest conectar
 
-  const app = await NestFactory.create(AppModule, { logger: false });
+  // Sem logs por padrão (a saída dos testes fica limpa). Quem quer ler os logs
+  // passa um logger próprio (ex.: JsonLogger escrevendo num array).
+  const app = await NestFactory.create(AppModule, { logger: options.logger ?? false });
   await app.listen(0);
   const url = (await app.getUrl()).replace("[::1]", "localhost");
 

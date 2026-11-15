@@ -11,6 +11,8 @@ import { Injectable, Logger, type BeforeApplicationShutdown, type OnApplicationB
 import { ProcessWagerTransactionUseCase } from "../../application/wagering/process-wager-transaction.use-case.ts";
 import { env } from "../../config/env.ts";
 import { decideOnError, type MessageDecision } from "./message-failure-policy.ts";
+import { logContext } from "../observability/log-context.ts";
+import { Metrics } from "../observability/metrics.ts";
 import { parseWagerTransactionMessage } from "./wager-transaction.message.ts";
 
 /** O que aconteceu numa leitura da fila (os testes e, depois, as métricas usam). */
@@ -26,6 +28,16 @@ export interface PollResult {
 }
 
 type Outcome = Exclude<keyof PollResult, "received">;
+
+/** Nome do desfecho na métrica sqs_messages_total (snake_case, convenção do Prometheus). */
+const OUTCOME_LABEL: Record<Outcome, string> = {
+  processed: "processed",
+  duplicates: "duplicate",
+  businessErrors: "business_error",
+  retried: "retried",
+  deadLettered: "dead_lettered",
+  released: "released",
+};
 
 /**
  * Consumidor da fila de entrada (wager-transactions.fifo).
@@ -58,7 +70,10 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
   private abort = new AbortController();
   private loopDone?: Promise<void>;
 
-  constructor(private readonly processWager: ProcessWagerTransactionUseCase) {}
+  constructor(
+    private readonly processWager: ProcessWagerTransactionUseCase,
+    private readonly metrics: Metrics,
+  ) {}
 
   onApplicationBootstrap(): void {
     if (!env.sqsConsumer.enabled) return;
@@ -130,10 +145,16 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       if (this.stopping || (groupId !== undefined && blockedGroups.has(groupId))) {
         await this.release(queueUrl, message);
         result.released++;
+        this.metrics.sqsMessages.inc({ outcome: OUTCOME_LABEL.released });
         continue;
       }
-      const outcome = await this.handle(queueUrl, message);
+      // Um contexto de log por mensagem: todo log escrito durante o processamento
+      // (inclusive dentro do use case) sai com o messageId e o correlationId dela.
+      const startedAt = performance.now();
+      const outcome = await logContext.run({ sqsMessageId: message.MessageId }, () => this.handle(queueUrl, message));
       result[outcome]++;
+      this.metrics.sqsMessages.inc({ outcome: OUTCOME_LABEL[outcome] });
+      this.metrics.sqsProcessingSeconds.observe((performance.now() - startedAt) / 1_000, { outcome: OUTCOME_LABEL[outcome] });
       if (outcome === "retried" && groupId !== undefined) blockedGroups.add(groupId);
     }
     return result;
@@ -149,6 +170,7 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
     try {
       const { messageId, input } = parseWagerTransactionMessage(message.Body ?? "");
       Object.assign(log, { messageId, providerId: input.providerId, walletId: input.walletId });
+      logContext.assign({ messageId, correlationId: messageId, providerId: input.providerId, walletId: input.walletId });
 
       const result = await this.processWager.execute(
         input,
@@ -208,6 +230,7 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
         case "dead-letter":
           await this.sendToDeadLetter(message, decision.reason);
           await this.delete(queueUrl, message);
+          this.metrics.sqsDeadLetters.inc({ reason: decision.reason });
           this.logger.error({ msg: "mensagem malformada: enviada para a DLQ", reason: decision.reason, ...log });
           return "deadLettered";
       }

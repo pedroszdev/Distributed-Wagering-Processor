@@ -15,8 +15,23 @@ function optional(name: string, fallback: string): string {
   return value === undefined || value === "" ? fallback : value;
 }
 
+const LOG_LEVELS = ["verbose", "debug", "log", "warn", "error", "fatal"] as const;
+type LogLevelName = (typeof LOG_LEVELS)[number];
+
+function logLevel(): LogLevelName {
+  const value = optional("LOG_LEVEL", "log");
+  if (!(LOG_LEVELS as readonly string[]).includes(value)) {
+    throw new Error(`LOG_LEVEL inválido: ${value} (use ${LOG_LEVELS.join(", ")})`);
+  }
+  return value as LogLevelName;
+}
+
 export const env = {
   port: Number(optional("PORT", "3000")),
+  log: {
+    format: optional("LOG_FORMAT", "json") as "json" | "pretty",
+    level: logLevel(),
+  },
   databaseUrl: required("DATABASE_URL"),
   aws: {
     region: optional("AWS_REGION", "us-east-1"),
