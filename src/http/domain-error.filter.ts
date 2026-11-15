@@ -1,6 +1,8 @@
-import { Catch, HttpStatus, Logger, type ArgumentsHost, type ExceptionFilter } from "@nestjs/common";
+import { Catch, HttpStatus, Logger, type ArgumentsHost } from "@nestjs/common";
 import type { Response } from "express";
 import { DomainError } from "../domain/shared/domain-error.ts";
+import { isTransientDatabaseError } from "../infrastructure/database/transient-error.ts";
+import { BaseExceptionFilter } from "@nestjs/core";
 
 /**
  * Traduz o `code` do erro de domínio para o status HTTP.
@@ -26,19 +28,38 @@ const STATUS_BY_CODE: Record<string, HttpStatus> = {
   WAGER_TRANSACTION_NOT_FOUND: HttpStatus.NOT_FOUND
 };
 
-@Catch(DomainError)
-export class DomainErrorFilter implements ExceptionFilter {
+@Catch()
+export class DomainErrorFilter extends BaseExceptionFilter {
   private readonly logger = new Logger(DomainErrorFilter.name);
-
-  catch(error: DomainError, host: ArgumentsHost): void {
+  
+  override catch(error: unknown, host: ArgumentsHost): void {  
     const response = host.switchToHttp().getResponse<Response>();
-    const status = STATUS_BY_CODE[error.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;
 
-    // Erro de domínio sem status mapeado = bug (ex.: INVALID_TRANSACTION_STATE).
-    if (status === HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logger.error(`Erro de domínio não mapeado: ${error.code}`, error.stack);
+    if (error instanceof DomainError) {
+      const status = STATUS_BY_CODE[error.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;
+
+      // Erro de domínio sem status mapeado = bug (ex.: INVALID_TRANSACTION_STATE).
+      if (status === HttpStatus.INTERNAL_SERVER_ERROR) {
+        this.logger.error(`Erro de domínio não mapeado: ${error.code}`, error.stack);
+      }
+
+      response.status(status).json({ code: error.code, message: error.message });
+      return 
     }
 
-    response.status(status).json({ code: error.code, message: error.message });
+    if (isTransientDatabaseError(error)) {
+      this.logger.warn(
+        `Falha transitória no banco; respondendo 503: ${(error as Error).message}`,
+      );
+      response.setHeader('Retry-After', '1')
+      response.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        code: "SERVICE_UNAVAILABLE",
+        message: "Falha temporária; tente novamente",
+      });      
+      return
+    }
+
+    super.catch(error, host);
   }
+
 }

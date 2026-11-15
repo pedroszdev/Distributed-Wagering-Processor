@@ -6,12 +6,13 @@ import { getTestOrm } from "./database.ts";
 export interface HttpResult<T = any> {
   status: number;
   body: T;
+  headers: Headers;
 }
 
 export interface TestApp {
   url: string;
   app: INestApplication;
-  get<T = any>(path: string): Promise<HttpResult<T>>;
+  get<T = any>(path: string, headers?: Record<string, string>): Promise<HttpResult<T>>;
   post<T = any>(path: string, body: unknown, headers?: Record<string, string>): Promise<HttpResult<T>>;
   close(): Promise<void>;
 }
@@ -31,13 +32,13 @@ export async function startTestApp(): Promise<TestApp> {
   const request = async <T>(path: string, init?: RequestInit): Promise<HttpResult<T>> => {
     const res = await fetch(`${url}${path}`, init);
     const text = await res.text();
-    return { status: res.status, body: (text ? JSON.parse(text) : undefined) as T };
+    return { status: res.status, body: (text ? JSON.parse(text) : undefined) as T, headers: res.headers };
   };
 
   return {
     url,
     app,
-    get: (path) => request(path),
+    get: (path, headers = {}) => request(path, { headers }),
     post: (path, body, headers = {}) =>
       request(path, {
         method: "POST",
