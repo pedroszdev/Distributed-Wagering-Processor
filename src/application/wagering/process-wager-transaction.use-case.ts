@@ -18,8 +18,9 @@ import { WalletNotFoundError } from "../wallet/wallet.errors.ts";
 import { decideIdempotency } from "./idempotency.ts";
 import { computePayloadHash } from "./payload-hash.ts";
 import { checkReversal } from "./reversal-rules.ts";
-import { IdempotencyConflictError, WalletPlayerMismatchError } from "./wagering.errors.ts";
+import { DuplicateMessageError, IdempotencyConflictError, WalletPlayerMismatchError } from "./wagering.errors.ts";
 import { OutboxMessageRepository } from "../../infrastructure/database/repositories/outbox-message.repository.ts";
+import { InboxMessageRepository } from "../../infrastructure/database/repositories/inbox-message.repository.ts";
 import { OutboxMessage } from "../../domain/outbox/outbox-message.ts";
 import type { EventContext, IntegrationEvent } from "../../domain/shared/integration-events.ts";
 import {
@@ -37,6 +38,12 @@ export interface WagerTransactionResult {
   failureCode?: FailureCode;
 }
 
+/** Quando a entrada vem da fila: quem está consumindo e o id da mensagem. */
+export interface InboxContext {
+  consumerName: string;
+  messageId: string;
+}
+
 interface RulesOutcome {
   entry?: WalletLedgerEntry; // existe quando o saldo mudou
   nextAttemptAt?: Date; // existe quando ficou PENDING_REFERENCE
@@ -50,25 +57,30 @@ export class ProcessWagerTransactionUseCase {
     private readonly transactions: WagerTransactionRepository,
     private readonly ledger: LedgerEntryRepository,
     private readonly outbox: OutboxMessageRepository,
+    private readonly inbox: InboxMessageRepository,
   ) {}
 
   /**
    * @param context quem chamou (HTTP ou SQS) diz o correlationId dos eventos.
    *                Sem contexto, gera um id novo (a cada chamada).
+   * @param inbox   só a entrada pela FILA passa isto: o registro na inbox entra
+   *                na MESMA transação da aposta (ou os dois existem, ou nenhum).
+   * @throws DuplicateMessageError se a mensagem já tinha sido processada.
    */
   async execute(
     input: WagerTransactionInput,
     context: EventContext = { correlationId: Bun.randomUUIDv7() },
+    inbox?: InboxContext,
   ): Promise<WagerTransactionResult> {
     const payloadHash = computePayloadHash(input);
     try {
-      return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context));
+      return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context, inbox));
     } catch (error) {
       if (
         isUniqueViolation(error, "wager_tx_provider_idempotency_key_uq") ||
         isUniqueViolation(error, "wager_tx_provider_external_id_uq")
       ) {
-        return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context));
+        return await this.em.transactional((tx) => this.process(tx, input, payloadHash, context, inbox));
       }
       throw error;
     }
@@ -79,7 +91,17 @@ export class ProcessWagerTransactionUseCase {
     input: WagerTransactionInput,
     payloadHash: string,
     context: EventContext,
+    inbox: InboxContext | undefined,
   ): Promise<WagerTransactionResult> {
+    // 0. Inbox (só quando veio da fila): a 2ª entrega da mesma mensagem para aqui,
+    //    antes de disputar o lock da wallet com as apostas de verdade.
+    //    `throw` (e não `return`): não há nada a gravar, e o consumidor recebe um
+    //    tipo de erro claro, que ele trata como "dá ack".
+    if (inbox) {
+      const isNew = await this.inbox.tryInsert(tx, { ...inbox, payloadHash });
+      if (!isNew) throw new DuplicateMessageError(inbox.consumerName, inbox.messageId);
+    }
+
     // 1. TRAVA a wallet. Daqui até o commit, ninguém mais mexe nela.
     const wallet = await this.wallets.findByIdForUpdate(tx, input.walletId);
     if (!wallet) throw new WalletNotFoundError(input.walletId);
