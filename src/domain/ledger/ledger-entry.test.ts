@@ -204,17 +204,34 @@ describe("WalletLedgerEntry.rehydrate", () => {
 });
 
 describe("WalletLedgerEntry: imutabilidade", () => {
-  test("campos são readonly (verificado pelo typecheck)", () => {
+  test("imutabilidade ESTRUTURAL: campos readonly e nenhum método de transição (seção 6.4)", () => {
     const entry = WalletLedgerEntry.create(validDebit());
 
-    // Se alguém remover o `readonly`, estas linhas deixam de ser erro de tipo,
-    // o @ts-expect-error fica "sem uso" e o `bun run typecheck` falha.
-    // @ts-expect-error: money é readonly
-    entry.money = brl("1.00");
-    // @ts-expect-error: balanceAfter é readonly
-    entry.balanceAfter = brl("1.00");
-    // @ts-expect-error: direction é readonly
-    entry.direction = LedgerDirection.Credit;
+    // 1. Campos readonly, verificado pelo typecheck: se alguém remover o `readonly`,
+    //    as linhas abaixo deixam de ser erro de tipo, o @ts-expect-error fica "sem
+    //    uso" e o `bun run typecheck` falha. A função nunca é chamada (o `readonly`
+    //    só existe no TypeScript; executar as atribuições mudaria o objeto de verdade).
+    const tryToMutate = () => {
+      // @ts-expect-error: money é readonly
+      entry.money = brl("1.00");
+      // @ts-expect-error: balanceAfter é readonly
+      entry.balanceAfter = brl("1.00");
+      // @ts-expect-error: direction é readonly
+      entry.direction = LedgerDirection.Credit;
+    };
+    expect(tryToMutate).toBeFunction();
+
+    // 2. Nenhum método que mude estado: a instância só sabe se conferir, e a classe
+    //    só sabe nascer (create) ou ser reconstruída (rehydrate).
+    expect(Object.getOwnPropertyNames(WalletLedgerEntry.prototype).sort((a, b) => a.localeCompare(b))).toEqual(["constructor", "isBalanced"]);
+    const staticMethods = Object.getOwnPropertyNames(WalletLedgerEntry).filter(
+      (name) => typeof (WalletLedgerEntry as unknown as Record<string, unknown>)[name] === "function",
+    );
+    expect(staticMethods.sort((a, b) => a.localeCompare(b))).toEqual(["create", "rehydrate"]);
+
+    // 3. Nada mudou no lançamento.
+    expect(entry.money.toJSON()).toEqual(validDebit().money.toJSON());
+    expect(entry.isBalanced()).toBe(true);
   });
 });
 

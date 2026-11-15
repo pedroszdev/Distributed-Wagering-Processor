@@ -7,9 +7,22 @@
  */
 export type Labels = Record<string, string>;
 
+/**
+ * Ordem das labels: por unidade de código (determinística, não depende do idioma
+ * da máquina como o `localeCompare`). É o que faz {a, b} e {b, a} serem a mesma série.
+ */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+function sortedKeys(labels: Labels): string[] {
+  return Object.keys(labels).sort(compareCodeUnits);
+}
+
 function labelKey(labels: Labels): string {
-  return Object.keys(labels)
-    .sort()
+  return sortedKeys(labels)
     .map((key) => `${key}=${labels[key]}`)
     .join(",");
 }
@@ -20,7 +33,7 @@ function escapeLabelValue(value: string): string {
 }
 
 function formatLabels(labels: Labels): string {
-  const keys = Object.keys(labels).sort();
+  const keys = sortedKeys(labels);
   if (keys.length === 0) return "";
   return `{${keys.map((key) => `${key}="${escapeLabelValue(labels[key]!)}"`).join(",")}}`;
 }

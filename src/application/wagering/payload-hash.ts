@@ -1,5 +1,20 @@
 import type { WagerTransactionInput } from "../../http/wager-transaction.request.ts";
 
+/**
+ * Ordem das chaves do JSON canônico: por unidade de código UTF-16 (a mesma da
+ * RFC 8785 / JCS, e a mesma do `sort()` padrão do JavaScript), escrita explícita.
+ *
+ * NÃO usar `localeCompare`: ele depende do idioma/ICU da máquina e põe "b" antes
+ * de "B" e "é" antes de "Z". A ordem mudaria o JSON canônico e, com ele, o hash de
+ * toda transação já gravada: um reenvio legítimo viraria conflito 409 em vez de
+ * replay. O teste "golden" em payload-hash.test.ts trava essa ordem.
+ */
+export function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 export function canonicalJson(value: unknown): string {
 
   if (Array.isArray(value)) {
@@ -7,7 +22,7 @@ export function canonicalJson(value: unknown): string {
   }
 
   if (value !== null && typeof value === "object") {
-    const chavesOrdenada = Object.keys(value).sort()
+    const chavesOrdenada = Object.keys(value).sort(compareCodeUnits)
     const partes: string[] = [];
     const obj = value as Record<string, unknown>
     for (let chave of chavesOrdenada) {

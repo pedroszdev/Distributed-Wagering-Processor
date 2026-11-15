@@ -108,7 +108,8 @@ function parseMetrics(text: string): Series[] {
     const match = /^([a-zA-Z_:][\w:]*)(?:\{([^}]*)\})?\s+(\S+)$/.exec(line);
     if (!match) continue;
     const labels: Record<string, string> = {};
-    for (const [, key, value] of (match[2] ?? "").matchAll(/(\w+)="((?:[^"\\]|\\.)*)"/g)) labels[key!] = value!;
+    // "Unrolled loop" ([^"\\]*(?:\\.[^"\\]*)*): mesma linguagem de `(?:[^"\\]|\\.)*`, mas linear (sem backtracking).
+    for (const [, key, value] of (match[2] ?? "").matchAll(/(\w+)="([^"\\]*(?:\\.[^"\\]*)*)"/g)) labels[key!] = value!;
     series.push({ name: match[1]!, labels, value: Number(match[3]) });
   }
   return series;
@@ -439,7 +440,7 @@ async function main(): Promise<void> {
 | **Latência p50 / p95 / p99** | **${fmt(percentile(latencies, 0.5))} / ${fmt(percentile(latencies, 0.95))} / ${fmt(percentile(latencies, 0.99))} ms** |
 | Latência máxima | ${fmt(latencies.at(-1) ?? 0)} ms |
 | **Taxa de erro** | **${fmt((errors / Math.max(1, samples.length)) * 100, 2)}%** (${errors} de ${samples.length}) |
-| Status | ${[...statusCount.entries()].sort().map(([s, n]) => `${s}: ${n}`).join(" · ")} |
+| Status | ${[...statusCount.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([s, n]) => `${s}: ${n}`).join(" · ")} |
 | Duplicatas absorvidas (replay) | ${duplicates} |
 
 ### Latência por cenário (ms)

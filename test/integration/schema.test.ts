@@ -46,6 +46,9 @@ describe("wallets", () => {
   test("o mesmo player pode ter uma wallet em outra moeda", async () => {
     const wallet = await insertWallet();
     await insertWallet({ player_id: wallet.player_id, currency: "USD" });
+
+    const rows = await sql("select currency from wallets where player_id = ? order by currency", [wallet.player_id]);
+    expect(rows.map((row) => row.currency)).toEqual(["BRL", "USD"]);
   });
 
   test("moeda fora do formato ISO-4217 é recusada", async () => {
@@ -66,6 +69,11 @@ describe("wager_transactions", () => {
     const wallet = await insertWallet();
     const tx = await insertTransaction(wallet);
     await insertTransaction(wallet, { provider_id: "provider-b", idempotency_key: tx.idempotency_key });
+
+    const rows = await sql("select provider_id from wager_transactions where idempotency_key = ? order by provider_id", [
+      tx.idempotency_key,
+    ]);
+    expect(rows.map((row) => row.provider_id)).toEqual(["provider-a", "provider-b"]);
   });
 
   test("externalTransactionId repetido no mesmo provider é recusado", async () => {
@@ -173,6 +181,12 @@ describe("wager_transactions: uma reversão por tipo (regra 4)", () => {
     const bet = await insertTransaction(wallet);
     await insertTransaction(wallet, reversalOf(bet, "REFUND"));
     await insertTransaction(wallet, reversalOf(bet, "ROLLBACK"));
+
+    const rows = await sql(
+      "select kind from wager_transactions where reference_transaction_id = ? and status = 'PROCESSED' order by kind",
+      [bet.id],
+    );
+    expect(rows.map((row) => row.kind)).toEqual(["REFUND", "ROLLBACK"]);
   });
 
   test("um REFUND REJECTED não bloqueia um REFUND válido depois", async () => {
@@ -186,6 +200,12 @@ describe("wager_transactions: uma reversão por tipo (regra 4)", () => {
       balance_after_amount: null,
     });
     await insertTransaction(wallet, reversalOf(bet, "REFUND"));
+
+    const rows = await sql(
+      "select status from wager_transactions where reference_transaction_id = ? and kind = 'REFUND' order by status",
+      [bet.id],
+    );
+    expect(rows.map((row) => row.status)).toEqual(["PROCESSED", "REJECTED"]);
   });
 });
 
@@ -281,5 +301,8 @@ describe("inbox_messages", () => {
     const base = { message_id: messageId, payload_hash: "h", received_at: new Date() };
     await insertRow("inbox_messages", { ...base, consumer_name: "consumer-a" });
     await insertRow("inbox_messages", { ...base, consumer_name: "consumer-b" });
+
+    const rows = await sql("select consumer_name from inbox_messages where message_id = ? order by consumer_name", [messageId]);
+    expect(rows.map((row) => row.consumer_name)).toEqual(["consumer-a", "consumer-b"]);
   });
 });

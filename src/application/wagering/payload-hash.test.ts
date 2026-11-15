@@ -151,3 +151,21 @@ describe("computePayloadHash", () => {
     expect(computePayloadHash(refund("transaction-100"))).not.toBe(computePayloadHash(refund("transaction-101")));
   });
 });
+
+/**
+ * Valores "golden": calculados ANTES de a ordem das chaves virar um comparador
+ * explícito (compareCodeUnits). Se algum dia mudarem, o hash de toda transação já
+ * gravada deixa de bater, e um reenvio legítimo vira 409 em vez de replay.
+ */
+describe("hash estável (golden)", () => {
+  test("o exemplo da seção 9 do desafio tem SEMPRE este hash", () => {
+    expect(computePayloadHash(validInput())).toBe("629836932b79106b99523d06a1e7fa80689b0ea1e1c47aa3f0a5a2c87d0c4344");
+  });
+
+  test("a ordem é por unidade de código UTF-16 (RFC 8785), NÃO a do idioma (localeCompare)", () => {
+    const keys = { b: 1, a: 2, B: 3, "é": 4, _x: 5, Z: 6, "10": 7, "9": 8 };
+    // maiúsculas antes de minúsculas, "_" entre elas, acentos no fim: a ordem dos códigos.
+    expect(canonicalJson(keys)).toBe('{"10":7,"9":8,"B":3,"Z":6,"_x":5,"a":2,"b":1,"é":4}');
+    // com localeCompare seria _x, a, b, B, é, Z: outro texto, outro hash.
+  });
+});

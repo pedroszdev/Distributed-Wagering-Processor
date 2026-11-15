@@ -63,9 +63,10 @@ export class ProcessWagerTransactionUseCase {
    */
   async execute(
     input: WagerTransactionInput,
-    context: EventContext = { correlationId: Bun.randomUUIDv7() },
+    eventContext?: EventContext,
     inbox?: InboxContext,
   ): Promise<WagerTransactionResult> {
+    const context: EventContext = eventContext ?? { correlationId: Bun.randomUUIDv7() };
     const payloadHash = computePayloadHash(input);
     const channel = inbox ? "sqs" : "http";
     const startedAt = performance.now();
