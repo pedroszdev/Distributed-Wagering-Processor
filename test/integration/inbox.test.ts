@@ -6,8 +6,10 @@ import { Money } from "../../src/domain/money/money.ts";
 import { WagerTransactionKind, WagerTransactionStatus } from "../../src/domain/wager-transaction/wager-transaction.enums.ts";
 import type { WagerTransactionInput } from "../../src/http/wager-transaction.request.ts";
 import { LedgerEntryRepository } from "../../src/infrastructure/database/repositories/ledger-entry.repository.ts";
+import { InboxMessageRepository } from "../../src/infrastructure/database/repositories/inbox-message.repository.ts";
+import { InboxMessage } from "../../src/domain/inbox/inbox-message.ts";
 import { startTestApp, type TestApp } from "./support/app.ts";
-import { closeTestOrm, sql } from "./support/database.ts";
+import { closeTestOrm, getTestOrm, sql } from "./support/database.ts";
 import { assertLedgerMatchesBalance } from "./support/ledger.ts";
 import { newId } from "./support/rows.ts";
 
@@ -151,6 +153,41 @@ describe("inbox: a mesma mensagem duas vezes", () => {
 
     const events = await sql("select payload from outbox_messages where payload ->> 'causationId' = ?", [messageId]);
     expect(events.map((e) => e.payload.eventType).sort()).toEqual(["WagerTransactionProcessed", "WalletBalanceChanged"]);
+  });
+});
+
+describe("inbox: a entrada como objeto de domínio (InboxMessage)", () => {
+  test("a linha gravada reidrata como InboxMessage JÁ processada, com o hash do payload", async () => {
+    const wallet = await newWallet("100.00");
+    const messageId = `msg-${newId()}`;
+    const before = Date.now();
+    await useCase.execute(bet(wallet), context(messageId), fromQueue(messageId));
+
+    const orm = await getTestOrm();
+    const message = await new InboxMessageRepository().findById(orm.em.fork(), CONSUMER, messageId);
+
+    expect(message).toBeInstanceOf(InboxMessage);
+    expect(message!.isProcessed()).toBe(true);
+    expect(message!.processedAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(message!.processedAt!.getTime()).toBeGreaterThanOrEqual(message!.receivedAt.getTime());
+    expect(message!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(message!.matchesPayload(message!.payloadHash)).toBe(true);
+  });
+
+  test("o repositório devolve null para quem não existe", async () => {
+    const orm = await getTestOrm();
+    expect(await new InboxMessageRepository().findById(orm.em.fork(), CONSUMER, `msg-${newId()}`)).toBeNull();
+  });
+
+  test("a duplicata tenta inserir uma InboxMessage com a MESMA chave e o banco recusa (ON CONFLICT)", async () => {
+    const orm = await getTestOrm();
+    const repository = new InboxMessageRepository();
+    const props = { consumerName: CONSUMER, messageId: `msg-${newId()}`, payloadHash: "f".repeat(64), receivedAt: new Date() };
+
+    const first = await orm.em.fork().transactional((tx) => repository.tryInsert(tx, InboxMessage.receive(props)));
+    const second = await orm.em.fork().transactional((tx) => repository.tryInsert(tx, InboxMessage.receive(props)));
+
+    expect([first, second]).toEqual([true, false]);
   });
 });
 

@@ -93,6 +93,7 @@ com transições explícitas que validam tudo **antes** de mudar qualquer campo.
 | `Wallet` | `debit` nunca deixa o saldo negativo (`InsufficientFundsError`); cada movimento incrementa `version` e devolve `{ before, after }` para o ledger |
 | `WagerTransaction` | nasce `PENDING`; `REFUND`/`ROLLBACK` exigem referência e `BET` não aceita; valor > 0 (zero só para `LOSS`); estados terminais (`PROCESSED`, `REJECTED`, `FAILED`) não mudam mais (`InvalidTransactionStateError`) |
 | `WalletLedgerEntry` | `balanceAfter = balanceBefore ± amount` (o `isBalanced`), valor positivo |
+| `InboxMessage` | identidade `(consumerName, messageId)` obrigatória (até 255 caracteres) e `payloadHash`; `markProcessed` uma vez só e nunca antes de `receivedAt`. Na entrada pela fila, ela nasce e é marcada processada **dentro** da transação da aposta, então só existe no banco se a aposta também existir |
 | `OutboxMessage` | `markPublished` uma vez só; `scheduleRetry` com backoff exponencial |
 | `IntegrationEvent<T>` | classe abstrata; `eventType` e `version` ficam **no tipo** de cada subclasse; o `data` usa `MoneyProps` (string), nunca a instância |
 
@@ -156,7 +157,7 @@ O envelope segue a seção 11: `eventId` (é também o id da linha na outbox), `
 | inbox: `INSERT … ON CONFLICT DO NOTHING RETURNING` | a duplicata não pode **quebrar** a transação (no Postgres, um erro aborta a transação inteira) |
 | claim da `PENDING_REFERENCE`: `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING` | a reserva (lease) acontece num comando só, atômico |
 | reconciliação: `SELECT` com `sum(...) FILTER (...)` | o saldo e o ledger no **mesmo snapshot** ([§14](#14-reconciliação)) |
-| migrations | escritas à mão, em SQL, e **reversíveis** (`up` e `down` na ordem inversa das FKs) |
+| migrations | escritas à mão, em SQL, e **reversíveis** (`up` e `down` na ordem inversa das FKs). O `migrations.test.ts` roda up → down → up e compara uma foto do catálogo do Postgres (colunas, constraints, índices, triggers, funções): o schema recriado é **idêntico**, e o `down` não deixa nada para trás |
 
 **A transação de uma aposta grava, atomicamente:**
 - a inbox (quando vem da fila);
@@ -573,7 +574,7 @@ correção, concorrência e mensageria. Mas o **ponto de extensão já existe e 
 
 ## 17. Estratégia de testes
 
-- **738 testes**, `bun test`, ~80 s. Integração **real**: Postgres 17 e MiniStack em containers.
+- **760 testes**, `bun test`, ~85 s. Integração **real**: Postgres 17 e MiniStack em containers.
   **Nenhum mock de Postgres ou SQS.** Os spies só **injetam falhas** em pontos exatos: o banco cai
   no insert do ledger, o processo morre antes do ack, o SQS recusa uma entrada do lote.
 - **Isolamento:** banco `wagering_test`, recriado **pelas migrations** a cada execução (então toda
@@ -595,6 +596,7 @@ correção, concorrência e mensageria. Mas o **ponto de extensão já existe e 
   | `FOR UPDATE` sem `SKIP LOCKED` na outbox | o teste "a outra instância pula" |
   | outbox sem lock | publishers concorrentes (duplicaram eventos) |
   | inbox sem checagem de duplicata | 3 testes de inbox |
+  | `down()` da migration esquecendo o `DROP FUNCTION` | o teste de reversibilidade (sobra no catálogo, e o `up` seguinte quebra) |
   | consumidor sem o bloqueio do grupo FIFO | o teste de ordem |
   | erro transitório tratado como ack | 3 testes (as apostas sumiriam) |
   | a BET não acorda a pendência | 11 testes de `PENDING_REFERENCE` |

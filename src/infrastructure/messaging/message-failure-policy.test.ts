@@ -11,6 +11,7 @@ import { WalletNotFoundError } from "../../application/wallet/wallet.errors.ts";
 import { CurrencyMismatchError, InvalidMoneyError } from "../../domain/money/money.errors.ts";
 import { WagerTransactionKind } from "../../domain/wager-transaction/wager-transaction.enums.ts";
 import { MissingReferenceError, UnexpectedReferenceError } from "../../domain/wager-transaction/wager-transaction.errors.ts";
+import { InvalidInboxMessageError } from "../../domain/inbox/inbox-message.errors.ts";
 import { decideOnError, retryDelaySeconds } from "./message-failure-policy.ts";
 
 const withCode = (code: string, message = "erro") => Object.assign(new Error(message), { code });
@@ -58,6 +59,7 @@ describe("decideOnError", () => {
     ["REFUND sem referência", new MissingReferenceError(WagerTransactionKind.Refund), "MISSING_REFERENCE"],
     ["BET com referência", new UnexpectedReferenceError(WagerTransactionKind.Bet), "UNEXPECTED_REFERENCE"],
     ["player não é dono da wallet", new WalletPlayerMismatchError("w-1", "p-1"), "WALLET_PLAYER_MISMATCH"],
+    ["entrada de inbox sem identidade", new InvalidInboxMessageError("messageId é obrigatório"), "INVALID_INBOX_MESSAGE"],
   ])("mensagem malformada: %s → DLQ na hora, com o código como motivo", (_label, error, code) => {
     expect(decideOnError(error, 1)).toEqual({ action: "dead-letter", reason: code });
   });

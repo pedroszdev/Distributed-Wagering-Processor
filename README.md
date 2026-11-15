@@ -21,7 +21,7 @@ duplicadas, fora de ordem, processadas ao mesmo tempo e com várias instâncias 
 - **Consumidor SQS:** usa o **mesmo use case** do HTTP. Tem inbox, ack só depois do commit, retry com backoff, DLQ e shutdown limpo.
 - **Referência fora de ordem:** a transação fica `PENDING_REFERENCE`, e um worker agendado tenta de novo com backoff e TTL.
 - **Operação:** reconciliação, `/health/live`, `/health/ready`, logs JSON com `correlationId` e métricas Prometheus.
-- **Testes:** 738 testes contra **Postgres e SQS reais**, incluindo races, 3 instâncias, `SIGKILL` no meio da carga e um teste de carga.
+- **Testes:** 760 testes contra **Postgres e SQS reais**, incluindo races, 3 instâncias, `SIGKILL` no meio da carga e um teste de carga.
 
 ---
 
@@ -164,7 +164,7 @@ docker run --rm --network wagering_default \
 
 ```bash
 bun run infra:up   # os testes de integração usam o Postgres e o SQS de verdade
-bun test           # ~80 s
+bun test           # ~85 s
 ```
 
 - Os testes usam um banco próprio (`wagering_test`, recriado do zero a cada execução **pelas
@@ -178,8 +178,8 @@ bun test           # ~80 s
 
 | Cobertura | Onde |
 |---|---|
-| `Money`, `Wallet`, `WagerTransaction`, ledger, regras de reversão, hash e idempotência, políticas de retry | `src/**/*.test.ts` (unidade) |
-| migrations, constraints, triggers | `test/integration/schema.test.ts` |
+| `Money`, `Wallet`, `WagerTransaction`, ledger, `InboxMessage`, `OutboxMessage`, regras de reversão, hash e idempotência, políticas de retry | `src/**/*.test.ts` (unidade) |
+| migrations (up → down → up recria um schema idêntico), constraints, triggers | `migrations`, `schema` |
 | regras de BET/WIN/LOSS/REFUND/ROLLBACK, atomicidade, outbox na mesma transação | `process-wager-transaction`, `wagering-outbox` |
 | contrato HTTP, 503, ledger paginado | `wagering.http`, `wallets.http` |
 | inbox e redelivery, retry, DLQ, ordem FIFO, SIGTERM | `inbox`, `sqs-consumer` |
@@ -248,7 +248,7 @@ O [`.env.example`](./.env.example) traz as do dia a dia. A lista completa, com o
 ```
 src/
   domain/            regras e invariantes, sem framework: Money, Wallet, WagerTransaction,
-                     WalletLedgerEntry, OutboxMessage, eventos de integração
+                     WalletLedgerEntry, InboxMessage, OutboxMessage, eventos de integração
   application/       use cases (orquestração e transação) e portas (EventPublisher)
   http/              controllers, parse e validação dos requests, respostas, filtro de erros, auth
   infrastructure/

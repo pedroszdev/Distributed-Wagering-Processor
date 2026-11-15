@@ -18,6 +18,7 @@ import { DuplicateMessageError, IdempotencyConflictError, WalletPlayerMismatchEr
 import { OutboxMessageRepository } from "../../infrastructure/database/repositories/outbox-message.repository.ts";
 import { InboxMessageRepository } from "../../infrastructure/database/repositories/inbox-message.repository.ts";
 import { OutboxMessage } from "../../domain/outbox/outbox-message.ts";
+import { InboxMessage } from "../../domain/inbox/inbox-message.ts";
 import type { EventContext } from "../../domain/shared/integration-events.ts";
 import { WagerRules } from "./wager-rules.ts";
 import { nextPendingAttemptAt, PENDING_REFERENCE_POLICY, type PendingReferencePolicy } from "./pending-reference-policy.ts";
@@ -115,8 +116,13 @@ export class ProcessWagerTransactionUseCase {
     //    antes de disputar o lock da wallet com as apostas de verdade.
     //    `throw` (e não `return`): não há nada a gravar, e o consumidor recebe um
     //    tipo de erro claro, que ele trata como "dá ack".
+    //    A entrada já nasce processada: ela é gravada NA MESMA transação da aposta,
+    //    então só existe no banco se a aposta também existir (commit junto).
     if (inbox) {
-      const isNew = await this.inbox.tryInsert(tx, { ...inbox, payloadHash });
+      const receivedAt = new Date();
+      const message = InboxMessage.receive({ ...inbox, payloadHash, receivedAt });
+      message.markProcessed(receivedAt);
+      const isNew = await this.inbox.tryInsert(tx, message);
       if (!isNew) throw new DuplicateMessageError(inbox.consumerName, inbox.messageId);
     }
 

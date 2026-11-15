@@ -25,6 +25,7 @@ const MALFORMED_CODES = new Set([
   "MISSING_REFERENCE",
   "UNEXPECTED_REFERENCE",
   "WALLET_PLAYER_MISMATCH",
+  "INVALID_INBOX_MESSAGE", // sem identidade válida, a mensagem não pode ser deduplicada
 ]);
 
 export type MessageDecision =
