@@ -1,8 +1,13 @@
 import { Controller, Get, Header } from "@nestjs/common";
 import { MetricsCollector } from "../infrastructure/observability/metrics-collector.ts";
 import { Metrics } from "../infrastructure/observability/metrics.ts";
+import { Public } from "./auth/provider-auth.guard.ts";
 
-/** GET /metrics: formato de texto do Prometheus (aberto, como os health checks). */
+/**
+ * GET /metrics: formato de texto do Prometheus. Aberto, como os health checks
+ * (o scraper fica na rede interna). Em produção, expor só para essa rede.
+ */
+@Public()
 @Controller("metrics")
 export class MetricsController {
   constructor(

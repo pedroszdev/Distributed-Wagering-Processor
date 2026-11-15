@@ -1,5 +1,7 @@
 import { Module, type MiddlewareConsumer, type NestModule } from "@nestjs/common";
-import { APP_FILTER } from "@nestjs/core";
+import { APP_FILTER, APP_GUARD } from "@nestjs/core";
+import { ProviderAuthGuard } from "./http/auth/provider-auth.guard.ts";
+import { NoopProviderAuthenticator, ProviderAuthenticator } from "./http/auth/provider-authenticator.ts";
 import { MikroOrmModule } from "@mikro-orm/nestjs";
 import { DomainErrorFilter } from "./http/domain-error.filter.ts";
 import { RequestContextMiddleware } from "./http/request-context.middleware.ts";
@@ -19,8 +21,14 @@ import { ObservabilityModule } from "./observability.module.ts";
     OutboxModule,
     WagerConsumerModule,
   ],
-  // Filter global: vale para todos os controllers.
-  providers: [{ provide: APP_FILTER, useClass: DomainErrorFilter }],
+  providers: [
+    // Filter global: vale para todos os controllers.
+    { provide: APP_FILTER, useClass: DomainErrorFilter },
+    // Autenticação (seção 2): ponto de extensão. Para ligar um IdP de verdade,
+    // troque NoopProviderAuthenticator por uma implementação OIDC da porta.
+    { provide: ProviderAuthenticator, useClass: NoopProviderAuthenticator },
+    { provide: APP_GUARD, useClass: ProviderAuthGuard },
+  ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {

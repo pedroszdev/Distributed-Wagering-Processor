@@ -26,7 +26,10 @@ const STATUS_BY_CODE: Record<string, HttpStatus> = {
   WALLET_ALREADY_EXISTS: HttpStatus.CONFLICT,
   CONCURRENT_UPDATE: HttpStatus.SERVICE_UNAVAILABLE,
   WALLET_PLAYER_MISMATCH: HttpStatus.BAD_REQUEST,
-  WAGER_TRANSACTION_NOT_FOUND: HttpStatus.NOT_FOUND
+  WAGER_TRANSACTION_NOT_FOUND: HttpStatus.NOT_FOUND,
+  // autenticação (ponto de extensão; desligada por padrão)
+  UNAUTHENTICATED: HttpStatus.UNAUTHORIZED,
+  PROVIDER_MISMATCH: HttpStatus.FORBIDDEN,
 };
 
 @Catch()
