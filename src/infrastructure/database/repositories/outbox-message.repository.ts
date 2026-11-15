@@ -29,8 +29,27 @@ export class OutboxMessageRepository {
       { attempts: message.attempts, 
         nextAttemptAt: message.nextAttemptAt, 
         publishedAt: message.publishedAt ?? null, 
-        lastError: message.lastError ?? null 
+        lastError: message.lastError ?? null
       })
   }
 
+  /**
+   * O evento WagerTransactionPendingReference de uma transação: quando o worker
+   * resolve a pendência, os eventos novos herdam o correlationId do pedido
+   * ORIGINAL e apontam para esse evento como causa (rastreabilidade de ponta a ponta).
+   */
+  async findPendingReferenceEvent(
+    em: EntityManager,
+    transactionId: string,
+  ): Promise<{ eventId: string; correlationId: string } | null> {
+    const [row] = await em.execute<{ event_id: string; correlation_id: string }[]>(
+      `select payload ->> 'eventId' as event_id, payload ->> 'correlationId' as correlation_id
+         from outbox_messages
+        where aggregate_id = ? and event_type = 'WagerTransactionPendingReference'
+        order by occurred_at desc
+        limit 1`,
+      [transactionId],
+    );
+    return row ? { eventId: row.event_id, correlationId: row.correlation_id } : null;
+  }
 }

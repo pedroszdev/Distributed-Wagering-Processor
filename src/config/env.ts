@@ -40,4 +40,15 @@ export const env = {
     retryBaseDelaySeconds: Number(optional("SQS_RETRY_BASE_DELAY_SECONDS", "5")),
     retryMaxDelaySeconds: Number(optional("SQS_RETRY_MAX_DELAY_SECONDS", "300")),
   },
+  pendingReference: {
+    workerEnabled: optional("PENDING_REFERENCE_WORKER_ENABLED", "true") === "true",
+    pollIntervalMs: Number(optional("PENDING_REFERENCE_POLL_INTERVAL_MS", "1000")),
+    batchSize: Number(optional("PENDING_REFERENCE_BATCH_SIZE", "20")),
+    // Quanto tempo um item fica reservado para um worker; se ele morrer, outro pega depois disso.
+    leaseMs: Number(optional("PENDING_REFERENCE_LEASE_MS", "30000")),
+    // Prazo para a referência aparecer; depois, REJECTED com REFERENCE_NOT_FOUND.
+    ttlMs: Number(optional("PENDING_REFERENCE_TTL_MS", "300000")),
+    retryBaseDelayMs: Number(optional("PENDING_REFERENCE_RETRY_BASE_MS", "1000")),
+    retryMaxDelayMs: Number(optional("PENDING_REFERENCE_RETRY_MAX_MS", "60000")),
+  },
 } as const;
