@@ -42,5 +42,11 @@ aws_sqs create-queue \
   --attributes file:///tmp/main-queue-attributes.json \
   --query QueueUrl --output text
 
+# Fila de SAÍDA: eventos de integração publicados pela outbox.
+aws_sqs create-queue \
+  --queue-name wagering-events.fifo \
+  --attributes FifoQueue=true \
+  --query QueueUrl --output text
+
 echo "Filas criadas:"
 aws_sqs list-queues

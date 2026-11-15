@@ -60,6 +60,7 @@ services:
       SQS_ENDPOINT: http://sqs:4566
       SQS_QUEUE_NAME: wager-transactions.fifo
       SQS_DLQ_NAME: wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE_NAME: wagering-events.fifo
     ports:
       - "3000"
 

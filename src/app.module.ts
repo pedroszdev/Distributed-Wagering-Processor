@@ -5,9 +5,10 @@ import { DomainErrorFilter } from "./http/domain-error.filter.ts";
 import ormConfig from "./infrastructure/database/mikro-orm.config.ts";
 import { WalletsModule } from "./wallets.module.ts";
 import { WageringModule } from "./wagering.module.ts";
+import { OutboxModule } from "./outbox.module.ts";
 
 @Module({
-  imports: [MikroOrmModule.forRoot(ormConfig), WalletsModule, WageringModule],
+  imports: [MikroOrmModule.forRoot(ormConfig), WalletsModule, WageringModule, OutboxModule],
   // Filter global: vale para todos os controllers.
   providers: [{ provide: APP_FILTER, useClass: DomainErrorFilter }],
 })

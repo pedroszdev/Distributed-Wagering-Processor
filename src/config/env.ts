@@ -23,5 +23,12 @@ export const env = {
     sqsEndpoint: optional("SQS_ENDPOINT", "http://localhost:4566"),
     queueName: optional("SQS_QUEUE_NAME", "wager-transactions.fifo"),
     dlqName: optional("SQS_DLQ_NAME", "wager-transactions-dlq.fifo"),
+    eventsQueueName: optional("SQS_EVENTS_QUEUE_NAME", "wagering-events.fifo"), 
   },
+  outbox: {
+    publisherEnabled: optional("OUTBOX_PUBLISHER_ENABLED", "true") === "true",
+    pollIntervalMs: Number(optional("OUTBOX_POLL_INTERVAL_MS", "500")),
+    batchSize: Number(optional("OUTBOX_BATCH_SIZE", "20")),
+  }
+
 } as const;
