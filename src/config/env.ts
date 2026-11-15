@@ -29,6 +29,12 @@ export const env = {
     publisherEnabled: optional("OUTBOX_PUBLISHER_ENABLED", "true") === "true",
     pollIntervalMs: Number(optional("OUTBOX_POLL_INTERVAL_MS", "500")),
     batchSize: Number(optional("OUTBOX_BATCH_SIZE", "20")),
-  }
-
+  },
+  sqsConsumer: {
+    enabled: optional("SQS_CONSUMER_ENABLED", "true") === "true",
+    // Vai para a inbox: (consumer_name, message_id). Trocar o nome = "outro consumidor".
+    name: optional("SQS_CONSUMER_NAME", "wager-transactions-consumer"),
+    batchSize: Number(optional("SQS_CONSUMER_BATCH_SIZE", "10")), // máximo do SQS
+    waitTimeSeconds: Number(optional("SQS_CONSUMER_WAIT_SECONDS", "10")), // long polling
+  },
 } as const;

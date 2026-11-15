@@ -6,9 +6,10 @@ import ormConfig from "./infrastructure/database/mikro-orm.config.ts";
 import { WalletsModule } from "./wallets.module.ts";
 import { WageringModule } from "./wagering.module.ts";
 import { OutboxModule } from "./outbox.module.ts";
+import { WagerConsumerModule } from "./wager-consumer.module.ts";
 
 @Module({
-  imports: [MikroOrmModule.forRoot(ormConfig), WalletsModule, WageringModule, OutboxModule],
+  imports: [MikroOrmModule.forRoot(ormConfig), WalletsModule, WageringModule, OutboxModule, WagerConsumerModule],
   // Filter global: vale para todos os controllers.
   providers: [{ provide: APP_FILTER, useClass: DomainErrorFilter }],
 })
