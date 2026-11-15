@@ -28,7 +28,8 @@ DLQ_ARN=$(aws_sqs get-queue-attributes \
   --query Attributes.QueueArn --output text)
 
 # maxReceiveCount: depois de 5 entregas sem ack, a mensagem vai para a DLQ.
-# Esse número é uma decisão sua; documente no ARCHITECTURE.md.
+# Com o backoff do consumidor (5s, 10s, 20s, 40s), são ~75s de tentativas: o
+# trade-off está no ARCHITECTURE.md (§12).
 cat > /tmp/main-queue-attributes.json <<EOF
 {
   "FifoQueue": "true",

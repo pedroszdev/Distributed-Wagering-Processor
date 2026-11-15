@@ -57,7 +57,7 @@ services:
       DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
 
   # A aplicação em container. Fica num profile para não subir junto no dia a dia
-  # (em dev você roda com `bun run dev`). Do zero, com várias instâncias:
+  # (em dev a API roda com `bun run dev`). Do zero, com várias instâncias:
   #   docker compose --profile app up --build --scale app=3
   app:
     profiles: ["app"]

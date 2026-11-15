@@ -23,10 +23,8 @@ export class WagerTransactionRepository {
   }
   
   async findById(em: EntityManager, id: string): Promise<WagerTransaction | null> {
-    // ✍️ findOne pelo id + mapper (igual aos outros)
-    const record = await em.findOne(WagerTransactionEntity, {id})
+    const record = await em.findOne(WagerTransactionEntity, { id });
     return record ? wagerTransactionToDomain(record) : null;
-
   }
 
   /**

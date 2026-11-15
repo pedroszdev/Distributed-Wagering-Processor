@@ -53,8 +53,8 @@ export class Wallet {
   get version(): number { return this._version; }
   get updatedAt(): Date { return this._updatedAt; }
 
-  // Aplicam a movimentação mantendo saldo e ledger consistentes entre si.
-  // Assinatura e retorno são decisão sua.
+  // Aplicam a movimentação e devolvem o saldo ANTES e DEPOIS: é exatamente o que o
+  // lançamento do ledger precisa, então saldo e ledger nascem do mesmo cálculo.
   debit(money: Money): { before: Money; after: Money } {
     this.assertSameCurrency(money)
 

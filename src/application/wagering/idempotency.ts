@@ -1,4 +1,4 @@
-import type { WagerTransaction } from "../../domain/wager-transaction/wager-transaction";
+import type { WagerTransaction } from "../../domain/wager-transaction/wager-transaction.ts";
 
 export type IdempotencyDecision =
   | { type: "new" }

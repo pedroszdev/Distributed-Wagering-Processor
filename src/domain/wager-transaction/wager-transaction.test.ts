@@ -244,7 +244,7 @@ describe("WagerTransaction: markProcessed sem referência em REFUND/ROLLBACK", (
 
     expect(() => tx.markProcessed(undefined, new Date(), brl("100.00"))).toThrow(MissingReferenceError);
 
-    // O bug que você corrigiu: o status não pode ter virado PROCESSED antes do erro.
+    // Valida ANTES de mudar: o status não pode ter virado PROCESSED antes do erro.
     expect(tx.status).toBe(Pending);
     expect(tx.processedAt).toBeUndefined();
     expect(tx.balanceAfter).toBeUndefined();

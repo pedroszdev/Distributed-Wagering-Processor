@@ -297,7 +297,7 @@ describe("REFUND", () => {
     const row = await transactionRow(result.transactionId);
     expect(row.status).toBe(PendingReference);
     expect(row.reference_transaction_id).toBeNull();
-    // Agendado para o futuro (o worker do dia 3 tenta de novo quando chegar a hora).
+    // Agendado para o futuro (o worker de PENDING_REFERENCE tenta de novo quando chegar a hora).
     const nextAttemptAt = new Date(row.next_attempt_at).getTime();
     expect(nextAttemptAt).toBeGreaterThanOrEqual(before + 900);
     expect(nextAttemptAt).toBeLessThanOrEqual(Date.now() + 1100);

@@ -1,9 +1,9 @@
 import { HttpStatus } from "@nestjs/common";
-import { WagerTransactionResult } from "../application/wagering/process-wager-transaction.use-case";
-import type { MoneyProps } from "../domain/money/money";
-import type { FailureCode } from "../domain/wager-transaction/failure-code";
-import type { WagerTransaction } from "../domain/wager-transaction/wager-transaction";
-import { WagerTransactionKind, WagerTransactionStatus } from "../domain/wager-transaction/wager-transaction.enums";
+import type { WagerTransactionResult } from "../application/wagering/process-wager-transaction.use-case.ts";
+import type { MoneyProps } from "../domain/money/money.ts";
+import type { FailureCode } from "../domain/wager-transaction/failure-code.ts";
+import type { WagerTransaction } from "../domain/wager-transaction/wager-transaction.ts";
+import { WagerTransactionKind, WagerTransactionStatus } from "../domain/wager-transaction/wager-transaction.enums.ts";
 
 export interface WagerTransactionView {
   id: string;

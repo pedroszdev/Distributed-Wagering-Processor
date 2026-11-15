@@ -9,9 +9,9 @@ import { Metrics } from "../infrastructure/observability/metrics.ts";
  * Traduz o `code` do erro de domínio para o status HTTP.
  *
  * O provedor decide se reenvia olhando o STATUS (e o `code`), sem precisar ler a
- * mensagem de texto (seção 9 do README). No dia 2 esta tabela cresce:
- * conflito de idempotência (409), rejeição de negócio (422), pendente (202),
- * falha transitória (503).
+ * mensagem de texto (seção 9 do desafio). Rejeição de negócio (422) e pendente
+ * (202) não passam por aqui: são resultados normais do use case (httpStatusFor).
+ * Falha transitória de infraestrutura vira 503 + Retry-After (abaixo).
  */
 const STATUS_BY_CODE: Record<string, HttpStatus> = {
   // payload inválido: corrija antes de reenviar

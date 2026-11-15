@@ -9,8 +9,10 @@ import type { WagerTransactionRecord } from "../entities/wager-transaction.entit
 
 /**
  * Domínio -> linha do banco.
- * `attempts` e `nextAttemptAt` são controle do worker de PENDING_REFERENCE (dia 2);
- * por enquanto uma transação nova começa com 0 tentativas.
+ * `attempts` e `nextAttemptAt` são controle do worker de PENDING_REFERENCE: toda
+ * transação nasce com 0 tentativas, e o `nextAttemptAt` só existe quando ela
+ * nasce PENDING_REFERENCE. Depois, quem atualiza esses campos é o próprio worker
+ * (WagerTransactionRepository.reschedulePendingReference / saveResolution).
  */
 export function wagerTransactionToRecord(tx: WagerTransaction, schedule: { nextAttemptAt?: Date } = {},): WagerTransactionRecord {
   return {
