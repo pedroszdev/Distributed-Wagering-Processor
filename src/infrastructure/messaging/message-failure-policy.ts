@@ -3,9 +3,14 @@ import { DuplicateMessageError } from "../../application/wagering/wagering.error
 import { DomainError } from "../../domain/shared/domain-error.ts";
 import { isTransientDatabaseError } from "../database/transient-error.ts";
 
-/** Backoff do retry: 5s, 10s, 20s, 40s... até 5 min. */
-const BASE_DELAY_SECONDS = 5;
-const MAX_DELAY_SECONDS = 300;
+/** Backoff do retry: base · 2^(entrega − 1), com teto. */
+export interface Backoff {
+  baseSeconds: number;
+  maxSeconds: number;
+}
+
+/** Padrão: 5s, 10s, 20s, 40s... até 5 min. (Os testes usam uma base menor, via env.) */
+export const DEFAULT_BACKOFF: Backoff = { baseSeconds: 5, maxSeconds: 300 };
 
 /**
  * Códigos de "a mensagem está errada": reenviar igual nunca vai funcionar.
@@ -28,9 +33,9 @@ export type MessageDecision =
   | { action: "retry"; delaySeconds: number };
 
 /** Espera antes da próxima tentativa (receiveCount começa em 1). */
-export function retryDelaySeconds(receiveCount: number): number {
+export function retryDelaySeconds(receiveCount: number, backoff: Backoff = DEFAULT_BACKOFF): number {
   const attempt = Math.max(1, receiveCount);
-  return Math.min(BASE_DELAY_SECONDS * 2 ** (attempt - 1), MAX_DELAY_SECONDS);
+  return Math.min(backoff.baseSeconds * 2 ** (attempt - 1), backoff.maxSeconds);
 }
 
 /**
@@ -41,7 +46,13 @@ export function retryDelaySeconds(receiveCount: number): number {
  * "erro de negócio" e o conflito de lock levaria ack SEM processar (aposta perdida).
  * Específicos primeiro, genérico por último.
  */
-export function decideOnError(error: unknown, receiveCount: number): MessageDecision {
+export function decideOnError(
+  error: unknown,
+  receiveCount: number,
+  backoff: Backoff = DEFAULT_BACKOFF,
+): MessageDecision {
+  const retry: MessageDecision = { action: "retry", delaySeconds: retryDelaySeconds(receiveCount, backoff) };
+
   // 1. Já processada antes: só confirma.
   if (error instanceof DuplicateMessageError) {
     return { action: "ack", reason: "duplicate" };
@@ -49,7 +60,7 @@ export function decideOnError(error: unknown, receiveCount: number): MessageDeci
 
   // 2. Passageiro (banco fora, deadlock, conflito de versão): tenta de novo depois.
   if (error instanceof ConcurrentWalletUpdateError || isTransientDatabaseError(error)) {
-    return { action: "retry", delaySeconds: retryDelaySeconds(receiveCount) };
+    return retry;
   }
 
   if (error instanceof DomainError) {
@@ -64,5 +75,5 @@ export function decideOnError(error: unknown, receiveCount: number): MessageDeci
 
   // 5. Desconhecido (bug?): não dá para saber se é passageiro, então tenta de novo.
   //    Depois de maxReceiveCount entregas, o próprio SQS move para a DLQ.
-  return { action: "retry", delaySeconds: retryDelaySeconds(receiveCount) };
+  return retry;
 }

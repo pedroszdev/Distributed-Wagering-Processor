@@ -160,7 +160,10 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       Object.assign(log, { transactionId: result.transactionId, status: result.status });
       decision = { action: "ack", reason: "processed" };
     } catch (error) {
-      decision = decideOnError(error, receiveCount);
+      decision = decideOnError(error, receiveCount, {
+        baseSeconds: env.sqsConsumer.retryBaseDelaySeconds,
+        maxSeconds: env.sqsConsumer.retryMaxDelaySeconds,
+      });
       Object.assign(log, { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
     }
     log.durationMs = Math.round(performance.now() - startedAt);

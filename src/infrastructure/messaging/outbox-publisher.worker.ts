@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from "@nestjs/common";
+import { Injectable, Logger, type BeforeApplicationShutdown, type OnApplicationBootstrap } from "@nestjs/common";
 import { PublishOutboxBatchUseCase } from "../../application/outbox/publish-outbox-batch.use-case.ts";
 import { env } from "../../config/env.ts";
 
@@ -7,7 +7,7 @@ import { env } from "../../config/env.ts";
  * Cada instância da API tem o seu; o SKIP LOCKED faz eles dividirem o trabalho.
  */
 @Injectable()
-export class OutboxPublisherWorker implements OnApplicationBootstrap, OnApplicationShutdown {
+export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private readonly logger = new Logger(OutboxPublisherWorker.name);
   private running = false;
   private timer?: ReturnType<typeof setTimeout>;
@@ -21,8 +21,12 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, OnApplicat
     this.schedule(0);
   }
 
-  /** SIGTERM: para de agendar e ESPERA a volta atual terminar (commit ou rollback). */
-  async onApplicationShutdown(): Promise<void> {
+  /**
+   * SIGTERM: para de agendar e ESPERA a volta atual terminar (commit ou rollback).
+   * beforeApplicationShutdown roda ANTES de o MikroORM fechar as conexões (ele fecha
+   * no onApplicationShutdown); assim a volta em andamento ainda consegue fazer commit.
+   */
+  async beforeApplicationShutdown(): Promise<void> {
     this.running = false;
     clearTimeout(this.timer);
     await this.currentRun;

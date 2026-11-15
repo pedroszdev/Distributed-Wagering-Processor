@@ -533,7 +533,7 @@ describe("worker (o loop de verdade)", () => {
   }
 
   async function stopWorker(worker: OutboxPublisherWorker): Promise<void> {
-    await worker.onApplicationShutdown();
+    await worker.beforeApplicationShutdown();
     outboxEnv.publisherEnabled = false;
   }
 

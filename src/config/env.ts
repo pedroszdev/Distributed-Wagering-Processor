@@ -36,5 +36,8 @@ export const env = {
     name: optional("SQS_CONSUMER_NAME", "wager-transactions-consumer"),
     batchSize: Number(optional("SQS_CONSUMER_BATCH_SIZE", "10")), // máximo do SQS
     waitTimeSeconds: Number(optional("SQS_CONSUMER_WAIT_SECONDS", "10")), // long polling
+    // Backoff do retry (base · 2^(entrega − 1), com teto). Os testes usam base 1.
+    retryBaseDelaySeconds: Number(optional("SQS_RETRY_BASE_DELAY_SECONDS", "5")),
+    retryMaxDelaySeconds: Number(optional("SQS_RETRY_MAX_DELAY_SECONDS", "300")),
   },
 } as const;
