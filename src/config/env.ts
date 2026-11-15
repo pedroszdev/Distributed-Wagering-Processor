@@ -43,7 +43,8 @@ export const env = {
   outbox: {
     publisherEnabled: optional("OUTBOX_PUBLISHER_ENABLED", "true") === "true",
     pollIntervalMs: Number(optional("OUTBOX_POLL_INTERVAL_MS", "500")),
-    batchSize: Number(optional("OUTBOX_BATCH_SIZE", "20")),
+    // Eventos por volta; o publisher manda em blocos de 10 (SendMessageBatch).
+    batchSize: Number(optional("OUTBOX_BATCH_SIZE", "100")),
   },
   sqsConsumer: {
     enabled: optional("SQS_CONSUMER_ENABLED", "true") === "true",

@@ -310,7 +310,7 @@ describe("métricas: outbox, PENDING_REFERENCE e DLQ", () => {
     await sql("update outbox_messages set published_at = now() where published_at is null");
     const wallet = await newWallet();
     await submit(payload(wallet, "BET", "1.00"));
-    spyOn(api.app.get(EventPublisher), "publish").mockRejectedValue(new Error("SQS fora"));
+    spyOn(api.app.get(EventPublisher), "publishBatch").mockRejectedValue(new Error("SQS fora"));
     const before = metrics().outboxPublishFailures.get();
 
     await api.app.get(PublishOutboxBatchUseCase).execute(50);

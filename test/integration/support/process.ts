@@ -27,14 +27,18 @@ export interface AppProcess {
  * morto com SIGKILL no meio de uma transação: o teste de verdade de "o processo
  * morre antes/depois do commit".
  */
-export async function startAppProcess(env: Record<string, string> = {}): Promise<AppProcess> {
+export async function startAppProcess(
+  env: Record<string, string> = {},
+  options: { logFile?: string } = {},
+): Promise<AppProcess> {
   const port = freePort();
   const url = `http://localhost:${port}`;
   // process.execPath: o mesmo binário do Bun que está rodando os testes (não depende do PATH).
   const child = Bun.spawn([process.execPath, "src/main.ts"], {
     cwd: PROJECT_ROOT,
     env: { ...process.env, NODE_ENV: "test", PORT: String(port), LOG_LEVEL: "error", ...env },
-    stdout: "ignore",
+    // Os logs (JSON, no stdout) vão para um arquivo quando pedido; senão, descartados.
+    stdout: options.logFile ? Bun.file(options.logFile) : "ignore",
     stderr: "inherit",
   });
 

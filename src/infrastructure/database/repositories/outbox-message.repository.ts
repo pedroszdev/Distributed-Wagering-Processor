@@ -22,6 +22,12 @@ export class OutboxMessageRepository {
     return records.map((record) => outboxMessageToDomain(record))
   }
 
+  /** Marca VÁRIOS eventos como publicados num UPDATE só (o caminho feliz do lote). */
+  async markPublished(em: EntityManager, ids: string[], publishedAt: Date): Promise<void> {
+    if (ids.length === 0) return;
+    await em.nativeUpdate(OutboxMessageEntity, { id: { $in: ids }, publishedAt: null }, { publishedAt });
+  }
+
   /** Grava o resultado da tentativa: publicada, ou attempts/nextAttemptAt/lastError novos. */
   async update(em: EntityManager, message: OutboxMessage): Promise<void> {
     await em.nativeUpdate(OutboxMessageEntity, 

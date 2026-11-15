@@ -4,6 +4,7 @@ import {
   DeleteMessageCommand,
   PurgeQueueCommand,
   ReceiveMessageCommand,
+  SendMessageBatchCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
 import { EventPublisher } from "../../src/application/outbox/event-publisher.ts";
@@ -79,9 +80,9 @@ interface PendingEvent {
 }
 
 /** Insere um evento pendente direto na outbox (por padrão, já vencido há 1s). */
-async function insertPending(options: { nextAttemptAt?: Date } = {}): Promise<PendingEvent> {
+async function insertPending(options: { nextAttemptAt?: Date; aggregateId?: string } = {}): Promise<PendingEvent> {
   const id = newId();
-  const aggregateId = newId();
+  const aggregateId = options.aggregateId ?? newId();
   const occurredAt = new Date();
   const payload = {
     eventId: id,
@@ -168,19 +169,34 @@ async function drainQueue(): Promise<void> {
 }
 
 /**
- * Espiona o publisher REAL (SQS) de uma instância. `before` roda antes de cada
- * publicação: dá para atrasar (para forçar paralelismo) ou lançar erro (SQS fora).
+ * Espiona o publisher REAL (SQS) de uma instância. `before` roda antes de CADA
+ * evento do lote: dá para atrasar (forçar paralelismo) ou lançar erro. Um evento
+ * cujo `before` lança vira falha SÓ DELE (como o `Failed[]` do SendMessageBatch);
+ * os outros vão para o SQS de verdade.
  */
 function spyPublisher(app: TestApp, before?: (message: OutboxMessage) => Promise<void> | void) {
   const publisher = app.app.get(EventPublisher);
-  const original = publisher.publish.bind(publisher);
-  return spyOn(publisher, "publish").mockImplementation(async (message: OutboxMessage) => {
-    await before?.(message);
-    return original(message);
+  const original = publisher.publishBatch.bind(publisher);
+  return spyOn(publisher, "publishBatch").mockImplementation(async (messages: OutboxMessage[]) => {
+    const failed = new Map<string, string>();
+    const ok: OutboxMessage[] = [];
+    for (const message of messages) {
+      try {
+        await before?.(message);
+        ok.push(message);
+      } catch (error) {
+        failed.set(message.id, String(error));
+      }
+    }
+    const result = await original(ok);
+    for (const [id, reason] of result.failed) failed.set(id, reason);
+    return { failed };
   });
 }
 
-const publishedIds = (spy: ReturnType<typeof spyPublisher>) => spy.mock.calls.map(([message]) => message.id);
+/** Todos os eventos que chegaram a ser ENVIADOS ao publisher, em ordem. */
+const publishedIds = (spy: ReturnType<typeof spyPublisher>) =>
+  spy.mock.calls.flatMap(([messages]) => messages.map((message) => message.id));
 
 const publishBatch = (app: TestApp) => app.app.get(PublishOutboxBatchUseCase);
 
@@ -376,6 +392,81 @@ describe("falha no SQS: retry com backoff", () => {
   });
 });
 
+describe("publicação em lote (SendMessageBatch)", () => {
+  /** O SQSClient de verdade do publisher da instância (para contar/forjar chamadas). */
+  const sqsClientOf = (app: TestApp) => (app.app.get(EventPublisher) as any).client as SQSClient;
+  const isBatchCall = (command: unknown) => (command as { constructor: { name: string } }).constructor.name === "SendMessageBatchCommand";
+
+  test("25 eventos → 3 chamadas ao SQS (10 + 10 + 5), não 25", async () => {
+    const events = await insertPendingMany(25);
+    const client = sqsClientOf(api);
+    const original = client.send.bind(client);
+    let batchCalls = 0;
+    spyOn(client, "send").mockImplementation(((command: any, ...rest: any[]) => {
+      if (isBatchCall(command)) batchCalls++;
+      return original(command, ...rest);
+    }) as any);
+
+    expect(await publishBatch(api).execute(50)).toEqual({ claimed: 25, published: 25, failed: 0 });
+
+    expect(batchCalls).toBe(3);
+    expect(await pendingCount(events.map((e) => e.id))).toBe(0);
+    const received = await receive(25);
+    expect(new Set(received.map((m) => m.body.eventId))).toEqual(new Set(events.map((e) => e.id)));
+  });
+
+  test("o SQS recusa UMA entrada do bloco (Failed[]) → só ela é reagendada, com o código do SQS no last_error", async () => {
+    const events = await insertPendingMany(5);
+    const failing = events[2]!;
+    const client = sqsClientOf(api);
+    const original = client.send.bind(client);
+    spyOn(client, "send").mockImplementation((async (command: any, ...rest: any[]) => {
+      if (!isBatchCall(command)) return original(command, ...rest);
+      // Manda de verdade só as outras 4 e devolve a falha parcial, como o SQS faz.
+      const entries = command.input.Entries.filter((e: { Id: string }) => e.Id !== failing.id);
+      const response = await original(new SendMessageBatchCommand({ ...command.input, Entries: entries }), ...rest);
+      return { ...response, Failed: [{ Id: failing.id, Code: "InternalError", SenderFault: false, Message: "falha interna" }] };
+    }) as any);
+
+    expect(await publishBatch(api).execute(50)).toEqual({ claimed: 5, published: 4, failed: 1 });
+
+    const row = await outboxRow(failing.id);
+    expect(row).toMatchObject({ published_at: null, attempts: 1 });
+    expect(row.last_error).toContain("InternalError");
+    expect(await pendingCount(events.filter((e) => e !== failing).map((e) => e.id))).toBe(0);
+    await receive(4);
+  });
+
+  test("um BLOCO inteiro falha (rede) → só os 10 dele são reagendados; os outros blocos saem", async () => {
+    const events = await insertPendingMany(25);
+    const client = sqsClientOf(api);
+    const original = client.send.bind(client);
+    let batchCalls = 0;
+    spyOn(client, "send").mockImplementation(((command: any, ...rest: any[]) => {
+      if (isBatchCall(command) && ++batchCalls === 2) return Promise.reject(new Error("socket hang up"));
+      return original(command, ...rest);
+    }) as any);
+
+    expect(await publishBatch(api).execute(50)).toEqual({ claimed: 25, published: 15, failed: 10 });
+    expect(await pendingCount(events.map((e) => e.id))).toBe(10);
+    await receive(15);
+  });
+
+  test("a ORDEM de um agregado se mantém entre os blocos (blocos em série, FIFO por grupo)", async () => {
+    const aggregateId = newId();
+    const now = Date.now();
+    const events: PendingEvent[] = [];
+    for (let i = 0; i < 23; i++) {
+      events.push(await insertPending({ aggregateId, nextAttemptAt: new Date(now - 60_000 + i * 100) }));
+    }
+
+    await publishBatch(api).execute(50);
+
+    const received = await receive(23, 10_000);
+    expect(received.map((m) => m.body.eventId)).toEqual(events.map((e) => e.id));
+  });
+});
+
 describe("publishers concorrentes sobre a mesma outbox", () => {
   test(
     "3 instâncias × 2 publishers em paralelo sobre 100 eventos → cada evento publicado EXATAMENTE uma vez",
@@ -450,7 +541,7 @@ describe("recuperação: o processo morre no meio", () => {
 
     // Passo 2: a instância A publica no SQS e "morre" antes de gravar o published_at.
     const spyA = spyPublisher(api);
-    spyOn(api.app.get(OutboxMessageRepository), "update").mockRejectedValue(new Error("processo morreu antes do commit"));
+    spyOn(api.app.get(OutboxMessageRepository), "markPublished").mockRejectedValue(new Error("processo morreu antes do commit"));
     await expect(publishBatch(api).execute(10)).rejects.toThrow("processo morreu");
 
     expect(publishedIds(spyA)).toEqual([event.id]); // chegou a sair para o SQS

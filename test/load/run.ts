@@ -14,7 +14,7 @@
  */
 import { cpus, totalmem, release, type } from "node:os";
 import { resolve } from "node:path";
-import { CreateQueueCommand, SQSClient } from "@aws-sdk/client-sqs";
+import { CreateQueueCommand, DeleteQueueCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { env } from "../../src/config/env.ts";
 import { closeTestOrm, getTestOrm, sql } from "../integration/support/database.ts";
 import { startAppProcess, type AppProcess } from "../integration/support/process.ts";
@@ -28,6 +28,11 @@ const CONFIG = {
   instances: intEnv("LOAD_INSTANCES", 3),
   wallets: intEnv("LOAD_WALLETS", 200),
   requestTimeoutMs: 10_000,
+  /**
+   * embedded: cada instância da API também roda os workers (outbox, PENDING_REFERENCE).
+   * dedicated: as instâncias da API NÃO rodam workers; +1 processo só de workers, sem HTTP.
+   */
+  publisherMode: (process.env.LOAD_PUBLISHER_MODE ?? "embedded") as "embedded" | "dedicated",
 };
 
 /** A mistura de operações (pesos somam 100). */
@@ -45,6 +50,11 @@ const WORKERS_ON = {
   OUTBOX_PUBLISHER_ENABLED: "true",
   PENDING_REFERENCE_WORKER_ENABLED: "true",
   SQS_CONSUMER_ENABLED: "false", // a carga entra pelo HTTP
+};
+const WORKERS_OFF = {
+  OUTBOX_PUBLISHER_ENABLED: "false",
+  PENDING_REFERENCE_WORKER_ENABLED: "false",
+  SQS_CONSUMER_ENABLED: "false",
 };
 
 // ============================================================================ tipos e utilitários
@@ -182,14 +192,37 @@ async function main(): Promise<void> {
   // ---------------------------------------------------------------- preparação
   const orm = await getTestOrm(); // recria o schema do zero (banco wagering_test)
   const [{ version: postgresVersion }] = await sql("select version()");
+  // Uma fila de eventos NOVA por execução, apagada no fim. Medido: o MiniStack fica
+  // mais lento conforme acumula volume (SendMessageBatch de ~11ms para ~57ms depois
+  // de ~95 mil mensagens, e esvaziar a fila não recupera). Sem isso, cada execução
+  // mediria um emulador mais lento que a anterior.
+  const eventsQueueName = `wagering-events-load-${Date.now()}.fifo`;
   const sqs = new SQSClient({ region: env.aws.region, endpoint: env.aws.sqsEndpoint });
-  for (const QueueName of [env.aws.eventsQueueName, env.aws.dlqName, env.aws.queueName]) {
+  const { QueueUrl: eventsQueueUrl } = await sqs.send(
+    new CreateQueueCommand({ QueueName: eventsQueueName, Attributes: { FifoQueue: "true" } }),
+  );
+  for (const QueueName of [env.aws.dlqName, env.aws.queueName]) {
     await sqs.send(new CreateQueueCommand({ QueueName, Attributes: { FifoQueue: "true" } }));
   }
-  sqs.destroy();
 
-  const apps = await Promise.all(Array.from({ length: CONFIG.instances }, () => startAppProcess(WORKERS_ON)));
-  console.log(`  instâncias no ar: ${apps.map((a) => a.url).join(", ")}`);
+  // LOAD_LOG_DIR=/algum/dir: guarda os logs JSON de cada instância (diagnóstico).
+  const logDir = process.env.LOAD_LOG_DIR;
+  const dedicated = CONFIG.publisherMode === "dedicated";
+  const logLevel = { LOG_LEVEL: logDir ? "log" : "error", SQS_EVENTS_QUEUE_NAME: eventsQueueName };
+  // `apps` recebem a carga HTTP; `workerApp` (modo dedicated) só roda os workers.
+  const apps = await Promise.all(
+    Array.from({ length: CONFIG.instances }, (_, i) =>
+      startAppProcess(
+        { ...(dedicated ? WORKERS_OFF : WORKERS_ON), ...logLevel },
+        logDir ? { logFile: resolve(logDir, `instance-${i}.log`) } : {},
+      ),
+    ),
+  );
+  const workerApp = dedicated
+    ? await startAppProcess({ ...WORKERS_ON, ...logLevel }, logDir ? { logFile: resolve(logDir, "worker.log") } : {})
+    : undefined;
+  const everyProcess = workerApp ? [...apps, workerApp] : apps;
+  console.log(`  API: ${apps.map((a) => a.url).join(", ")}${workerApp ? ` · workers: ${workerApp.url}` : ""}`);
 
   const wallets: Wallet[] = [];
   for (let i = 0; i < CONFIG.wallets; i++) wallets.push(await createWallet(apps[i % apps.length]!, "10000.00"));
@@ -236,7 +269,7 @@ async function main(): Promise<void> {
   const sampler = (async () => {
     while (Date.now() < deadline) {
       try {
-        const series = parseMetrics(await (await fetch(`${apps[0]!.url}/metrics`)).text());
+        const series = parseMetrics(await (await fetch(`${everyProcess.at(-1)!.url}/metrics`)).text());
         lagSamples.push({
           pending: sum(series, "outbox_pending_messages"),
           oldestAge: sum(series, "outbox_oldest_pending_age_seconds"),
@@ -299,8 +332,14 @@ async function main(): Promise<void> {
   const [{ negative }] = await sql("select count(*)::int as negative from wallets where balance_amount < 0");
 
   // ---------------------------------------------------------------- métricas das instâncias
-  const series = await scrapeAll(apps);
-  await Promise.all(apps.map((app) => app.stop()));
+  const series = await scrapeAll(everyProcess);
+  const publishedPerInstance = await Promise.all(
+    everyProcess.map(async (app) => sum(parseMetrics(await (await fetch(`${app.url}/metrics`)).text()), "outbox_messages_published_total")),
+  );
+  const publishFailures = sum(series, "outbox_publish_failures_total");
+  await Promise.all(everyProcess.map((app) => app.stop()));
+  await sqs.send(new DeleteQueueCommand({ QueueUrl: eventsQueueUrl })).catch(() => {});
+  sqs.destroy();
   await closeTestOrm();
   void orm;
 
@@ -343,13 +382,12 @@ async function main(): Promise<void> {
   ];
   if (publishLag(0.95) > 1_000) {
     findings.push(
-      `- **A outbox não acompanhou o ritmo de escrita:** ~${fmt(generatedPerSecond, 0)} eventos/s gerados ` +
-        `contra ~${fmt(publishedPerSecond, 0)} eventos/s publicados (somando as ${CONFIG.instances} instâncias), ` +
-        `então a fila cresceu até ${maxPending} e o lag p95 chegou a ${fmt(publishLag(0.95) / 1_000)} s. ` +
-        `Nada se perdeu (esvaziou em ${fmt(drainSeconds, 1)} s depois da carga, tudo publicado), mas o atraso existe. ` +
-        `Causa: uma \`SendMessage\` por evento, em série, dentro da transação do lote. Melhorias, em ordem de ` +
-        `impacto: \`SendMessageBatch\` (até 10 eventos por chamada), publicar grupos FIFO diferentes em paralelo, ` +
-        `e um \`OUTBOX_BATCH_SIZE\` maior.`,
+      `- **A outbox fica um pouco atrás no pico:** ~${fmt(generatedPerSecond, 0)} eventos/s gerados ` +
+        `contra ~${fmt(publishedPerSecond, 0)} eventos/s publicados (somando as ${CONFIG.instances} instâncias); ` +
+        `a fila chegou a ${maxPending} e o lag p95 a ${fmt(publishLag(0.95) / 1_000)} s. Nada se perdeu ` +
+        `(esvaziou em ${fmt(drainSeconds, 1)} s depois da carga, tudo publicado). O publisher já manda em lote ` +
+        `(\`SendMessageBatch\`, blocos de 10, em série para preservar a ordem FIFO); os próximos passos seriam ` +
+        `publicar grupos FIFO diferentes em paralelo e escalar instâncias/conexões.`,
     );
   } else {
     findings.push(`- **Outbox em dia:** lag de publicação p95 de ${fmt(publishLag(0.95))} ms.`);
@@ -375,7 +413,11 @@ async function main(): Promise<void> {
 | Runtime | Bun ${Bun.version} |
 | Banco | ${String(postgresVersion).split(",")[0]} (Docker, mesma máquina) · pool de 10 conexões por instância (padrão do pg-pool) |
 | Mensageria | SQS via MiniStack (Docker, mesma máquina) |
-| Instâncias | ${CONFIG.instances} processos \`bun src/main.ts\` com outbox publisher e worker de PENDING_REFERENCE ligados |
+| Instâncias | ${
+    dedicated
+      ? `${CONFIG.instances} processos \`bun src/main.ts\` só de API (workers desligados) + 1 processo só de workers (outbox e PENDING_REFERENCE, sem tráfego HTTP) — \`LOAD_PUBLISHER_MODE=dedicated\``
+      : `${CONFIG.instances} processos \`bun src/main.ts\`, cada um com a API e os workers (outbox e PENDING_REFERENCE) — \`LOAD_PUBLISHER_MODE=embedded\``
+  } |
 | Gerador de carga | o mesmo host (compete por CPU com as instâncias e o banco) |
 
 ## Metodologia
@@ -417,7 +459,7 @@ ${byScenario.map((s) => `| ${s.scenario} | ${s.count} | ${fmt(s.p50)} | ${fmt(s.
 
 | Métrica | Valor |
 |---|---|
-| Eventos publicados | ${published} |
+| Eventos publicados | ${published} (por instância: ${publishedPerInstance.join(" · ")}) · falhas de publicação: ${publishFailures} |
 | Lag de publicação (commit → SQS) p50 / p95 / p99 | ${fmt(publishLag(0.5))} / ${fmt(publishLag(0.95))} / ${fmt(publishLag(0.99))} ms (estimado pelo histograma) |
 | Maior idade do evento pendente mais antigo, durante a carga | ${fmt(maxOldestAge, 2)} s |
 | Maior fila de eventos pendentes, durante a carga | ${maxPending} |
@@ -438,6 +480,32 @@ ${findings.join("\n")}
 
 Não há meta de RPS (seção 14): o objetivo é mostrar que, sob carga concorrente real e com duplicatas,
 **não há erro, divergência nem saldo negativo**, e medir quanto essa garantia custa.
+
+## Histórico: o que este teste mudou no código
+
+**1. Publicação em lote.** As primeiras execuções mostraram que a outbox não acompanhava a escrita:
+o publisher fazia uma \`SendMessage\` por evento, em série, e um \`UPDATE\` por evento. A correção foi
+publicar com \`SendMessageBatch\` (blocos de 10, em série para preservar a ordem FIFO) e marcar os
+publicados num único \`UPDATE\`. A/B nas mesmas condições (3 instâncias embedded, 48 usuários, 20 s,
+MiniStack limpo, 2 execuções de cada lado):
+
+| Outbox | Antes (\`SendMessage\` por evento) | Depois (\`SendMessageBatch\`) |
+|---|---|---|
+| Lag de publicação p95 | 23,0–25,6 s | 4,0–4,1 s |
+| Maior fila de pendentes | ~3.000–3.200 | ~1.000–1.200 |
+| Tempo para esvaziar depois da carga | 11–12 s | ~2 s |
+| Eventos publicados/s | ~221 | ~370 |
+| Throughput da API | 206–215 req/s | 237–243 req/s |
+
+**2. O emulador também degrada.** Execuções seguidas foram ficando mais lentas, nos dois modos. A causa
+não era o código: o MiniStack acumula estado com o volume (o \`SendMessageBatch\` foi de ~11 ms para
+~57 ms depois de ~95 mil mensagens; esvaziar a fila não recuperava, reiniciar o container sim).
+Por isso cada execução usa uma fila de eventos nova e a apaga no fim.
+
+**3. Workers em toda instância vs. um processo dedicado.** Com o emulador limpo,
+\`LOAD_PUBLISHER_MODE=embedded\` (3 publishers, um por instância) teve lag p95 de ~4,0 s e esvaziou em
+~2 s; \`dedicated\` (1 processo só de workers, sem HTTP) ficou em ~4,9–5,0 s e ~5 s. Mais publishers
+em paralelo (via SKIP LOCKED) rendem mais que isolar um só; o padrão ficou \`embedded\`.
 `;
 
   const reportPath = resolve(import.meta.dir, "REPORT.md");
