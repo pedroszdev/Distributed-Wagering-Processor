@@ -49,6 +49,10 @@ decisão traz o teste que a comprova. Setup e comandos estão no [README](./READ
   workers. Cada papel liga e desliga por variável de ambiente. A coordenação entre instâncias é
   **toda feita no Postgres**: locks de linha, `SKIP LOCKED`, leases e constraints. Não existe estado
   compartilhado em memória nem lock global.
+- **As migrations não rodam na subida da aplicação.** Elas rodam num passo próprio (o serviço
+  `migrate` do Compose, ou `bun run migrate`), que roda uma vez e termina antes de as instâncias
+  subirem. Com N instâncias migrando ao mesmo tempo, elas disputariam o schema. Separado, a falha
+  de uma migration impede a subida em vez de derrubar instâncias já no ar.
 - **O Postgres é a fonte da verdade** de saldo, ledger, idempotência, inbox e outbox. O SQS é
   transporte. O FIFO e a deduplicação do SQS são **otimizações**: a correção não depende deles
   (seção 8 do desafio).

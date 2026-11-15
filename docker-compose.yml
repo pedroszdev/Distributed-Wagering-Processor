@@ -40,16 +40,35 @@ services:
     volumes:
       - ./docker/sqs/create-queues.sh:/scripts/create-queues.sh:ro
 
+  # Execução única: aplica as migrations pendentes e termina. Roda UMA vez, antes
+  # das instâncias da aplicação (mesmo com --scale app=3), então nenhuma instância
+  # sobe sem o schema. Idempotente: com o schema em dia, só confirma e sai.
+  # Usa a MESMA imagem da app (quem faz o build é o serviço `app`, uma vez só;
+  # dois serviços com `build:` fazem o Compose usar o bake do buildx sem necessidade).
+  migrate:
+    profiles: ["app"]
+    image: wagering-app:local
+    pull_policy: never # a imagem é local (construída pelo serviço app), não existe em registry
+    command: ["bun", "src/infrastructure/database/migrate.ts"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+
   # A aplicação em container. Fica num profile para não subir junto no dia a dia
-  # (em dev você roda com `bun run dev`). Use para testar várias instâncias:
+  # (em dev você roda com `bun run dev`). Do zero, com várias instâncias:
   #   docker compose --profile app up --build --scale app=3
   app:
     profiles: ["app"]
     build: .
+    image: wagering-app:local
     depends_on:
       postgres:
         condition: service_healthy
       sqs-init:
+        condition: service_completed_successfully
+      migrate:
         condition: service_completed_successfully
     environment:
       PORT: 3000

@@ -39,7 +39,7 @@ duplicadas, fora de ordem, processadas ao mesmo tempo e com várias instâncias 
 bun install
 cp .env.example .env
 bun run infra:up        # sobe Postgres + SQS e cria as filas FIFO
-bun run migration:up    # aplica as migrations no banco "wagering"
+bun run migrate         # aplica as migrations no banco "wagering"
 bun run dev             # API em http://localhost:3000 (com reload automático)
 ```
 
@@ -61,20 +61,26 @@ curl -s localhost:3000/health/ready    # {"status":"ok","checks":{"database":{"s
 | `bun run test:load` | teste de carga, que escreve `test/load/REPORT.md` (ver abaixo) |
 | `bun run infra:up` / `infra:down` | sobe / derruba Postgres e SQS |
 | `bun run infra:reset` | derruba e **apaga os dados** (volumes) |
-| `bun run migration:up` / `migration:down` | aplica / reverte as migrations |
+| `bun run migrate` | aplica as migrations pendentes (o mesmo script que o serviço `migrate` roda no Docker) |
+| `bun run migration:up` / `migration:down` | aplica / reverte as migrations pela CLI do MikroORM |
 | `bun run migration:list` | lista as migrations aplicadas |
 
 ## Várias instâncias (3+)
 
 A mesma imagem roda como API **e** como worker. Os workers são ligados por variável de ambiente e
 dividem o trabalho entre as instâncias (`SKIP LOCKED` e lease no banco), então dá para escalar sem
-configurar nada:
+configurar nada. **Do zero, só com Docker** (não precisa de Bun na máquina):
 
 ```bash
-bun run infra:up && bun run migration:up
 docker compose --profile app up --build --scale app=3
 docker compose port --index 1 app 3000    # porta de cada instância (--index 1, 2, 3)
 ```
+
+A ordem de subida é garantida pelo Compose:
+1. o Postgres fica saudável e o `sqs-init` cria as filas;
+2. o serviço **`migrate`** aplica as migrations pendentes e termina. Ele roda uma vez só, mesmo com
+   `--scale`, e é idempotente;
+3. só depois as instâncias da `app` sobem. Se a migration falhar, nenhuma instância sobe.
 
 ## Infraestrutura local
 
